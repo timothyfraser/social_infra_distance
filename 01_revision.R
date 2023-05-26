@@ -82,10 +82,13 @@ data = m$path_grid %>%
   ungroup()
 
 data %>%
-  group_by(type) %>%
+  mutate(cat = ntile(pop_density_int, 2)) %>%
+
+  group_by(cat, type) %>%
   summarize(
-    r_white = cor(log(rate+1), pop_white, use = "pairwise.complete.obs") %>% round(2),
-    r_income = cor(log(rate +1), log(median_income), use = "pairwise.complete.obs") %>% round(2),
+    density = median(pop_density_int, na.rm = TRUE),
+    r_white = cor(rate, pop_white, use = "pairwise.complete.obs") %>% round(2),
+    r_income = cor(rate, log(median_income), use = "pairwise.complete.obs") %>% round(2),
     count = sum(count, na.rm = TRUE),
     rate = mean(rate, na.rm = TRUE) %>% round(2),
   )
@@ -93,6 +96,14 @@ data %>%
 data %>%
   filter(type == "total") %>%
   summarize(income = median(median_income, na.rm = TRUE),
-            white = median(pop_white, na.rm = TRUE))
+            white = median(pop_white, na.rm = TRUE),
+            pop_density_int = median(pop_density_int, na.rm = TRUE))
 
-read_rds("building_dist_dataset.rds")
+
+read_rds("building_dist_dataset.rds") %>%
+  select(building_id, community:social, pop_white, median_income) %>%
+  pivot_longer(cols = community:social, names_to = "type", values_to = "dist") %>%
+  group_by(type) %>%
+  summarize(#dist = median(dist, na.rm = TRUE),
+            r_white = cor(pop_white, dist, use = "pairwise.complete.obs"),
+            r_income = cor(median_income, dist, use = "pairwise.complete.obs"))

@@ -1260,6 +1260,18 @@ texreg::htmlreg(
     "Model 10<br>Area Traits",
     "Model 11<br>Amenities",
     "Model 12<br>Extended Controls"),
+  custom.coef.map = list(
+    "pop_density_int" = "Pop. Density",
+    "ntile(pop_white, 4)" = "% White (Quartiles)",
+    "log(median_income)" = "Income (log)",
+    "log(train_dist)" = "Distance to Train (log)",
+    "log(bus_dist)" = "Distance to Bus (log)",
+    "log(cost_sqft)" = "Cost per sq.ft. (log)",
+    "overall_cond" = "Building Condition",
+    "own_occ" = "Owner Occupied",
+    "yr_built" = "Year Built",
+    "(Intercept)" = "Constant"
+  ),
   bold = 0.10, stars = c(0.001, 0.01, 0.05, 0.1),
   custom.gof.rows = list("Max VIF" = myvif %>% unlist()),
   omit.coef = "neighborhood",
@@ -1280,6 +1292,10 @@ texreg::htmlreg(
 library(tidyverse)
 library(Zelig)
 library(viridis)
+#install.packages(c("VGAM", "AER", "geepack", "MCMCpack", "maxLik"))
+#install.packages("Zelig", repos = "http://r.iq.harvard.edu/", type  = "source")
+# download.file(url = "https://cran.r-project.org/src/contrib/Archive/Zelig/Zelig_5.1.7.tar.gz", destfile = "zelig.tar.gz")
+# install.packages("zelig.tar.gz", type = "source")
 
 mydat <- read_rds("building_dist_dataset.rds") %>%
   filter(neighborhood != "Other") %>%
@@ -1327,6 +1343,7 @@ mystat <- read_rds("building_dist_dataset.rds") %>%
 
 # Get rid of unnecessary data
 remove(mydat)
+
 
 bind_rows(
   z1 %>% 
@@ -1424,7 +1441,7 @@ bind_rows(
   
     write_rds("raw_data/myfd.rds")
 
-rm(z1,z2,z3,z4, mydat)
+rm(z1,z2,z3,z4)
 ```
 
 
@@ -1434,7 +1451,7 @@ mysim <- read_rds("raw_data/mysim.rds")
 myfd <- read_rds("raw_data/myfd.rds")
 
 
-ggplot() +
+gg = ggplot() +
   geom_crossbar(data = mysim,
                 mapping = aes(x = median * 100, y = estimate, 
                               ymin = lower_ci, ymax = upper_ci, 
@@ -1464,6 +1481,8 @@ ggplot() +
         plot.subtitle = element_text(hjust = 0.5),
         plot.caption = element_text(hjust = 0),
         plot.caption.position = "plot")
+
+ggsave(gg, filename = "viz/crossbars.png", dpi = 500, width = 7, height = 7)
 ```
 
 
@@ -1529,6 +1548,8 @@ What percentage of social infrastructure sites near that building are of type X?
 Need total number of social infrastructure sites near that building
 
 ```{r, message = FALSE, warning = FALSE}
+library(dplyr)
+library(sf)
 grid <- read_rds("raw_data/grid.rds") %>%
   as_tibble() %>%
   select(-geometry)
