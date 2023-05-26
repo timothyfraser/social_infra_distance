@@ -637,6 +637,10 @@ ggplot() +
   geom_sf(data = grid, fill = NA, color = "white")
 ```
 
+```{r}
+remove(buffer)
+```
+
 Next, let's get a jumbo dataset, where each row indicates a site-buffer pair, showing every site that fell into every buffer. (In other words, some sites will show up multiple times, captured by multiple buffers. That's okay - that's intended.) Let's also import our buildings, to make a gigantic dataset of building-buffer pairs. It's not clear which size of buffer we need, so we're going to do a bunch, all in a loop.
 
 ```{r, eval = FALSE, message = FALSE}
@@ -652,25 +656,28 @@ get_buffer = function(mydistance){
     # Lets zoom in JUST to sites overlapping our 1 km buffer, doing an inner_join (as opposed to a left_join)
     st_join(buffer, left = FALSE) %>%
     # Let's keep a copy
-    write_rds(paste("raw_data/buffer_sites_", mydistance, ".rds", sep = ""))
+    saveRDS(paste("raw_data/buffer_sites_", mydistance, ".rds", sep = ""))
   
   read_rds("raw_data/buildings_points.rds") %>%
     # Each matched to a buffer!
     # Lets zoom in JUST to sites overlapping our 1 km buffer, doing an inner_join (as opposed to a left_join)
     st_join(buffer, left = FALSE) %>%
     # let's keep a copy just in case
-    write_rds(paste("raw_data/buffer_buildings_", mydistance, ".rds", sep = ""))
+    saveRDS(paste("raw_data/buffer_buildings_", mydistance, ".rds", sep = ""))
   
   # Now save the buffer to file, in case we need it.
   buffer %>%
-    write_rds(paste("raw_data/buffer_", mydistance, ".rds", sep = ""))
+    saveRDS(paste("raw_data/buffer_", mydistance, ".rds", sep = ""))
   
 }
 
-# Run the loop for 0, 100, 500, 1000, 1500, and 2000 meter buffers
-c(0, 100, 500, 1000, 1500, 2000) %>%
-  map(~get_buffer(.))
 
+# Originally, we ran the loop for 0, 100, 500, 1000, 1500, and 2000 meter buffers
+# c(0, 100, 500, 1000, 1500, 2000) %>%
+#   map(~get_buffer(.))
+
+# But we really only need the loop for 1000 meters
+get_buffer(1000)
 ```
 
 Now, we're going to do something called a ```function.``` In a function, we write a loop of code that we ask the computer to do several times in a row, given an input. Only the input changes, so your choice of input matters - in this case, we will supply the function with each of our differnt ```buffer_id```, so that we can run this code many times, once per buffer.
@@ -679,7 +686,7 @@ Now, we're going to do something called a ```function.``` In a function, we writ
 get_distance = function(mybuffer_id){
   require(tidyverse)
   require(sf)
-
+  
   # Show progress
   print(mybuffer_id)
   
@@ -695,83 +702,83 @@ get_distance = function(mybuffer_id){
   
   # If we have any valid data in this cell to analyze, then do the following:
   if(length(samplebuildings$building_id) > 0 & length(samplesites$id) > 0){
-  # Collect a set of unique identifier pairs for the lines we're about the make
-  # Use expand grid to get a complete set of buildings and sites,
-  # In the same order supplied to st_nearest_points
-  mydetails <-  expand_grid(
-    # Grab the building ID
-    samplebuildings %>% as_tibble() %>% select(building_id),
-    # Grab the site id and type
-    samplesites %>% as_tibble() %>% select(id, type))
-  
-  
-  mylines <- samplebuildings %>%
-    # Please give me lines between my building and every one of our sites
-    st_nearest_points(samplesites) %>%
-    # Format as an sf object, with the WGS 84 coordinate reference system (code = 4326)
-    # and rename the weird column to geometry
-    st_as_sf(crs = 4326) %>% rename(geometry = x) %>%
-    # Now calculate the distance of these lines, in meters!
-    mutate(dist = st_length(geometry) %>% as.numeric()) %>%
-    as_tibble() %>%
-    select(dist) %>%
-    # Bind in unique identifiers
-    bind_cols(mydetails %>% select(building_id, type))
-  
-  mylines %>%
-    # For each type, per grid cell buffer,
-    group_by(building_id, type) %>%
-    # Calculate median distance using 10 thresholds,
-    summarize(
-      # let's get median distance as crow flies between buildings in this block 
-      # and social infrastructure of this type 
-      # within 100 feet of that building
-      dist100 = median(dist[dist <= 100], na.rm = TRUE),
-      # within 200 feet of that building
-      dist200 = median(dist[dist <= 200], na.rm = TRUE),
-      # within 300 feet of that building
-      dist300 = median(dist[dist <= 300], na.rm = TRUE),
-      # within 400 feet of that building
-      dist400 = median(dist[dist <= 400], na.rm = TRUE),
-      # et cetera
-      dist500 = median(dist[dist <= 500], na.rm = TRUE),
-      dist600 = median(dist[dist <= 600], na.rm = TRUE),
-      dist700 = median(dist[dist <= 700], na.rm = TRUE),
-      dist800 = median(dist[dist <= 800], na.rm = TRUE),
-      dist900 = median(dist[dist <= 900], na.rm = TRUE),
-      dist1000 = median(dist[dist <= 1000], na.rm = TRUE),
-      # Also be sure to use no threshold once too
-      dist = median(dist, na.rm = TRUE),
-      
-      # Let's also count the total sites that fall into that area!
-      count100 = sum(!is.na(type[dist <= 100]), na.rm = TRUE),
-      # within 200 feet of that building
-      count200 = sum(!is.na(type[dist <= 200]), na.rm = TRUE),
-      # within 300 feet of that building
-      count300 = sum(!is.na(type[dist <= 300]), na.rm = TRUE),
-      # within 400 feet of that building
-      count400 = sum(!is.na(type[dist <= 400]), na.rm = TRUE),
-      # et cetera
-      count500 = sum(!is.na(type[dist <= 500]), na.rm = TRUE),
-      count600 = sum(!is.na(type[dist <= 600]), na.rm = TRUE),
-      count700 = sum(!is.na(type[dist <= 700]), na.rm = TRUE),
-      count800 = sum(!is.na(type[dist <= 800]), na.rm = TRUE),
-      count900 = sum(!is.na(type[dist <= 900]), na.rm = TRUE),
-      count1000 = sum(!is.na(type[dist <= 1000]), na.rm = TRUE),
-      # Also be sure to use no threshold once too
-      count = sum(!is.na(type), na.rm = TRUE),
-      
-      # Finally, let's append that buffer ID
-      buffer_id = mybuffer_id) %>%
-    ungroup() %>%
-    # Write that cell to file
-    write_rds(paste("count/", mybuffer_id, ".rds", sep = ""))
-  
+    # Collect a set of unique identifier pairs for the lines we're about the make
+    # Use expand grid to get a complete set of buildings and sites,
+    # In the same order supplied to st_nearest_points
+    mydetails <-  expand_grid(
+      # Grab the building ID
+      samplebuildings %>% as_tibble() %>% select(building_id),
+      # Grab the site id and type
+      samplesites %>% as_tibble() %>% select(id, type))
+    
+    
+    mylines <- samplebuildings %>%
+      # Please give me lines between my building and every one of our sites
+      st_nearest_points(samplesites) %>%
+      # Format as an sf object, with the WGS 84 coordinate reference system (code = 4326)
+      # and rename the weird column to geometry
+      st_as_sf(crs = 4326) %>% rename(geometry = x) %>%
+      # Now calculate the distance of these lines, in meters!
+      mutate(dist = st_length(geometry) %>% as.numeric()) %>%
+      as_tibble() %>%
+      select(dist) %>%
+      # Bind in unique identifiers
+      bind_cols(mydetails %>% select(building_id, type))
+    
+    mylines %>%
+      # For each type, per grid cell buffer,
+      group_by(building_id, type) %>%
+      # Calculate median distance using 10 thresholds,
+      summarize(
+        # let's get median distance as crow flies between buildings in this block 
+        # and social infrastructure of this type 
+        # within 100 feet of that building
+        dist100 = median(dist[dist <= 100], na.rm = TRUE),
+        # within 200 feet of that building
+        dist200 = median(dist[dist <= 200], na.rm = TRUE),
+        # within 300 feet of that building
+        dist300 = median(dist[dist <= 300], na.rm = TRUE),
+        # within 400 feet of that building
+        dist400 = median(dist[dist <= 400], na.rm = TRUE),
+        # et cetera
+        dist500 = median(dist[dist <= 500], na.rm = TRUE),
+        dist600 = median(dist[dist <= 600], na.rm = TRUE),
+        dist700 = median(dist[dist <= 700], na.rm = TRUE),
+        dist800 = median(dist[dist <= 800], na.rm = TRUE),
+        dist900 = median(dist[dist <= 900], na.rm = TRUE),
+        dist1000 = median(dist[dist <= 1000], na.rm = TRUE),
+        # Also be sure to use no threshold once too
+        dist = median(dist, na.rm = TRUE),
+        
+        # Let's also count the total sites that fall into that area!
+        count100 = sum(!is.na(type[dist <= 100]), na.rm = TRUE),
+        # within 200 feet of that building
+        count200 = sum(!is.na(type[dist <= 200]), na.rm = TRUE),
+        # within 300 feet of that building
+        count300 = sum(!is.na(type[dist <= 300]), na.rm = TRUE),
+        # within 400 feet of that building
+        count400 = sum(!is.na(type[dist <= 400]), na.rm = TRUE),
+        # et cetera
+        count500 = sum(!is.na(type[dist <= 500]), na.rm = TRUE),
+        count600 = sum(!is.na(type[dist <= 600]), na.rm = TRUE),
+        count700 = sum(!is.na(type[dist <= 700]), na.rm = TRUE),
+        count800 = sum(!is.na(type[dist <= 800]), na.rm = TRUE),
+        count900 = sum(!is.na(type[dist <= 900]), na.rm = TRUE),
+        count1000 = sum(!is.na(type[dist <= 1000]), na.rm = TRUE),
+        # Also be sure to use no threshold once too
+        count = sum(!is.na(type), na.rm = TRUE),
+        
+        # Finally, let's append that buffer ID
+        buffer_id = mybuffer_id) %>%
+      ungroup() %>%
+      # Write that cell to file
+      saveRDS(paste("count/", mybuffer_id, ".rds", sep = ""))
+   
   }
 }
 
 get_distance %>%
-  write_rds("raw_data/get_distance_function.rds")
+  saveRDS("raw_data/get_distance_function.rds")
 remove(grid, buffer) 
 ```
 
@@ -807,9 +814,11 @@ buffer$buffer_id %>%
 plan("sequential")
 
 # Now bind the results together into one data.frame
-dir("count", full.names = TRUE) %>%
-  map_dfr(~read_rds(.)) %>%
-  write_rds("raw_data/buffer_dist.rds")
+tibble(file = dir("count", full.names = TRUE)) %>%
+  filter(!str_detect(file, "Cell ")) %>%
+  split(.$file) %>%
+  map_dfr(~read_rds(.$file)) %>%
+  saveRDS("raw_data/buffer_dist.rds")
 ```
 
 ```{r}
@@ -981,7 +990,7 @@ transit <- read_rds("raw_data/buildings_transit.rds") %>%
   ungroup()
 
 
-mydist <- read_rds("raw_data/buffer_dist.rds") %>%
+read_rds("raw_data/buffer_dist.rds") %>%
   # There are 275 builings in Boston that are unlabelled. We will just remove them.
   filter(nchar(building_id) > 1) %>%
   # Collect the following variables, telling us...
@@ -1000,16 +1009,16 @@ mydist <- read_rds("raw_data/buffer_dist.rds") %>%
   group_by(building_id) %>%
   summarize(
     # Get the modal cell,
-    cell_id = cell_id %>% table() %>% sort(decreasing = TRUE) %>% names() %>% .[1],
+    cell_id = cell_id %>% table() %>% sort(decreasing = TRUE) %>% names() %>% .[1] %>% as.double(),
     # and taking the median of their entries
     community = median(community, na.rm = TRUE),
     parks = median(parks, na.rm = TRUE),
     worship = median(worship, na.rm = TRUE),
     social = median(social, na.rm = TRUE)) %>%
-  ungroup() %>%
+  ungroup()  %>%
   left_join(by = "cell_id", y = grid %>%
   select(cell_id, neighborhood, pop_density_int, pop_white, pop_black, pop_hisplat, pop_asian,
-         pop_some_college, median_income, income_inequality, median_monthly_housing_cost))  %>%
+         pop_some_college, median_income, income_inequality, median_monthly_housing_cost)) %>%
   # Get the unique building code.
   # Some buildings have multiple entries, as a B0 & B1 (It only happens rarely, so this describes places that have extensions large enough to render themselves their own polygons.)
   mutate(id = str_extract(building_id, pattern = "[0-9]+")) %>%
@@ -1019,10 +1028,9 @@ mydist <- read_rds("raw_data/buffer_dist.rds") %>%
   # Now join in distance to public transit
   left_join(by = "building_id", y = transit) %>% 
   # Save to file
-  write_rds("building_dist_dataset.rds")
+  saveRDS("building_dist_dataset.rds")
 
 rm(list=ls())
-
 
 ```
 
