@@ -5,13 +5,10 @@
 library(gert)
 library(credentials)
 library(usethis)
-
+library(git2r)
 
 create_github_token(scopes = c("admin:org", "repo", "workflow", "user:email"), description = "social_infra_distance")
 set_github_pat()
-
-gert::git_add(dir(all.files = TRUE))
-gert::git_commit_all(message = "---")
 
 
 # And clone a repository that you made on github
@@ -52,14 +49,14 @@ use_git_config(
 # Initiate Git (in project directory from about)
 use_git(message = "OK!")
 
+use_git_remote(name = "origin", url = "")
 # Add your sensitive files to .gitignore
 usethis::git_vaccinate()
 
 # Link git remote to our repository URL
 usethis::use_git_remote(
   name = "origin", 
-  url = "https://github.com/Gao-Labs/moves", 
-  overwrite = TRUE)
+  url = "https://github.com/timothyfraser/social_infra_distance.git")
 
 # Configure the default branch to be main
 usethis::git_default_branch_configure(name = "main")
@@ -78,6 +75,9 @@ usethis::git_sitrep()
 # Should be ready to push.
 
 
+gert::git_add(dir(all.files = TRUE))
+gert::git_commit_all(message = "---")
+gert::git_push()
 
 library(googledrive)
 # Link up to this account
