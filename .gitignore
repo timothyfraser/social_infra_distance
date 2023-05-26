@@ -13,3 +13,6 @@ raw_data/buffer_dist.rds
 raw_data/buffer_dist_100.rds
 raw_data/buildings.rds
 rsconnect/
+.Rdata
+.httr-oauth
+.DS_Store
