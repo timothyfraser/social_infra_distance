@@ -69,11 +69,10 @@ usethis::pr_merge_main()
 
 # Do a preliminary commit, to ready R for pushing
 gert::git_commit_all(message = "Setup commit")
- 
+
 # Check situation
 usethis::git_sitrep()
 # Should be ready to push.
-
 
 gert::git_add(dir(all.files = TRUE))
 gert::git_commit_all(message = "---")
