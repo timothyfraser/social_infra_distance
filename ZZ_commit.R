@@ -1,5 +1,6 @@
-#' @name commit.R
+#' @name ZZ_commit.R
 #' This script commits to github.
+#' For use by repository owner only. Readers will not need this.
 
 #install.packages("gert")
 library(gert)

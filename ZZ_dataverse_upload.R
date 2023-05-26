@@ -1,7 +1,8 @@
-#' @name 00_make_dataverse.R
+#' @name ZZ_make_dataverse.R
 #' @description Script for making and saving big files on the dataverse.
 #' Some files are too big to store on github, so we've saved them in the Harvard Dataverse. Use this code to retrieve them.
-
+#' For use by repository owner only. Readers will not need this.
+#' 
 # install.packages("dataverse")
 library(dataverse)
 library(dplyr)

@@ -1,5 +1,6 @@
-#' @name commit.R
-#' This script commits to github.
+#' @name ZZ_github_setup.R
+#' This script sets up initial connection to github repository.
+#' For use by repository owner only. Readers will not need this.
 
 #install.packages("gert")
 library(gert)

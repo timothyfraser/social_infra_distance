@@ -1,4 +1,4 @@
-#' @name 02_dataverse.R
+#' @name 02_dataverse_download.R
 #' @description Second script to run.
 #' Some files are too big to store on github, so we've saved them in the Harvard Dataverse. Use this code to retrieve them.
 
