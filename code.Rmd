@@ -1030,6 +1030,12 @@ read_rds("raw_data/buffer_dist.rds") %>%
   # Save to file
   saveRDS("building_dist_dataset.rds")
 
+
+read_rds("building_dist_dataset.rds") %>%
+  # Filter to sites within boston neighborhoods
+  filter(neighborhood != "Other") %>%
+  # Save to file
+  saveRDS("building_dist_dataset.rds")
 rm(list=ls())
 
 ```
