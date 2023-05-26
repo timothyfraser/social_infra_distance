@@ -1,0 +1,1940 @@
+---
+title: "Social Infrastructure Team Guide"
+subtitle: "Getting Started"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::material:
+    highlight: kate
+---
+
+```{r setup, include=FALSE}
+## Global options
+knitr::opts_chunk$set(cache = TRUE)
+```
+
+# 0. Getting Started
+
+Hi! This site will be our starting point for sharing coding, data, and new techniques for our research project. You can start your own RStudio.Cloud project with this data using the [following link](https://rstudio.cloud/project/3500070). 
+
+Note: It's okay to skip the ```Data Prep``` section below; this is just info on how I've compiled our data so far. The good stuff starts in Section 2.
+
+
+# 1. Data Prep
+
+```{r}
+```
+
+
+
+## Get Points
+
+First, we're going to run the following code to generate our data.
+
+```{r, message=FALSE, warning = FALSE, eval = FALSE}
+# Load packages
+library(tidyverse)
+library(sf)
+
+# Load in the raw points
+read_csv("raw_data/boston_social_infra_2022_03_03.csv") %>%
+  # Convert to sf format,
+  st_as_sf(
+    # using the x and y columns to make a sf point object
+    coords = c("x", "y"), 
+    # setting the Coordinate Reference System (CRS) to 4326, 
+    # which is the World Global System 1984 projection.
+    crs = 4326) %>%
+  # Filter to just points that were harvested from Google
+  #filter(source == "googlapi") %>%
+  # Filter to just these common types of social infrastructure
+  filter(type %in% c("Parks", "Social Businesses", 
+                     "Community Spaces", "Places of Worship")) %>%
+  # Save as an R Data file ".rds", which is easier for use. Use read_rds() to load.
+  write_rds("raw_data/sites.rds")
+```
+
+
+## Get cells
+
+Next, let's load and format our grid cells.
+
+```{r, eval = FALSE}
+read_sf("raw_data/grid_covariates_tracts.kml") %>%
+  # get rid of fluff
+  select(-c(Name:icon)) %>%
+  # Just look at main zone
+  #filter(str_detect(milestone, "M1|M2|M3|M4"))  %>%
+  # save to file!
+  write_rds("raw_data/grid.rds")
+
+```
+
+## Get buildings
+
+
+```{r, eval = FALSE}
+library(tidyverse)
+library(sf)
+read_sf("https://bostonopendata-boston.opendata.arcgis.com/datasets/boston::boston-buildings.geojson?outSR=%7B%22latestWkid%22%3A2249%2C%22wkid%22%3A102686%7D") %>%
+  select(building_id = BLDG_ID) %>%
+  write_rds("raw_data/buildings.rds")
+
+# Convert buildings to points
+read_rds("raw_data/buildings.rds") %>%
+  mutate(geometry = st_centroid(geometry)) %>%
+  # Do an inner join to just keep buildings within this grid
+  st_join(read_rds("raw_data/grid.rds") %>% select(cell_id, geometry), left = FALSE) %>%
+  mutate(building_id = building_id %>% na_if("")) %>%
+  filter(!is.na(building_id)) %>%
+  write_rds("raw_data/buildings_points.rds")
+
+```
+
+## Get roads
+
+```{r, eval = FALSE}
+library(tidyverse)
+library(sf)
+
+read_sf("https://bostonopendata-boston.opendata.arcgis.com/datasets/boston::boston-street-segments.geojson?outSR=%7B%22latestWkid%22%3A2249%2C%22wkid%22%3A102686%7D") %>%
+  select(street_id = STREET_ID, segment_id = SEGMENT_ID) %>%
+    # Do an inner join to just keep roads within this grid
+  st_join(read_rds("raw_data/grid.rds") %>% select(cell_id, geometry), left = FALSE) %>%
+  write_rds("raw_data/streets.rds")
+```
+
+```{r, eval = FALSE}
+# Here's how you might visualize these all together
+grid <- read_rds("raw_data/grid.rds") 
+sites <- read_rds("raw_data/sites.rds")
+buildings <- read_rds("raw_data/buildings_points.rds") # >40,000 points
+
+ggplot() +
+  geom_sf(data = grid) +
+  geom_sf(data = buildings, color = "blue", alpha = 0.25) +
+  geom_sf(data = sites)
+
+rm(list = ls())
+```
+
+# 2. Case Study Selection
+
+Pick your case study! Which grid cell do you want? Explore on Google MyMaps, learn the number of the cell, and try out the analyses below on your chosen grid cell. If you get ideas - go wild!
+
+```{r}
+library(tidyverse)
+library(sf)
+grid <- read_rds("raw_data/grid.rds")
+
+grid %>% head()
+```
+
+```{r}
+ggplot() +
+  geom_sf(data = grid, mapping = aes(fill = neighborhood)) +
+  geom_sf_text(data = grid, mapping = aes(label = str_remove(cell_id, "Cell "))) +
+  theme_void()
+
+```
+
+
+# 3. Analyze: Nearest Social Infrastructure
+
+Try out the code below to create the spatial data.frame, ```nearesttype```. This will be a data.frame where each row represents a building, with the traits of the nearest social infrastructure site appended to it. Below, you'll learn how to:
+
+- use ```st_nearest_feature``` with ```st_join``` to get these sites.
+
+- visualize this information.
+
+Please try it out on your chosen grid cell case study. Then, think, what kind of interesting information can we extract from this data.frame ```nearesttype```? Think bar charts, frequencies, etc.
+
+
+```{r, message = FALSE, warning = FALSE}
+
+# Here's how you might visualize these all together
+grid <- read_rds("raw_data/grid.rds") %>%
+  filter(cell_id == "Cell 124")
+sites <- read_rds("raw_data/sites.rds") %>%
+  filter(cell_id == "Cell 124")
+buildings <- read_rds("raw_data/buildings_points.rds") %>%
+  filter(cell_id == "Cell 124")
+streets <- read_rds("raw_data/streets.rds") %>%
+  filter(cell_id == "Cell 124")
+
+# Albers Equal Area Conic Projection
+aea <- "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=m +no_defs"
+
+
+# Identify which sites are closest to each building site
+nearesttype <- buildings %>% 
+  st_join(sites %>% select(id, name, type), 
+          join = st_nearest_feature)
+
+ggplot() +
+  # Add grid as background
+  geom_sf(data = grid, fill = "black") +
+  geom_sf(data = streets, color = "grey") +
+  # Visualize buildings, colored by type of social infrastructure nearest to it
+  geom_sf(data = nearesttype, mapping = aes(fill = type),
+          shape = 21, color = "white", 
+          # Add some attributes to the dot (stroke = how thick the outline is)
+          stroke = 0.25, size = 2, alpha = 0.90) +
+  labs(fill = "Type of\nNearest\nSocial\nInfrastructure",
+       subtitle = "Boston Buildings by Nearest Social Infrastructure")
+```
+
+
+# 4. Analyze: Average Distance to Social Infrastructure
+
+Try out the code below to create the spatial data.frame, ```nearesttype```. This will be a data.frame where each row represents a building, with the traits of the nearest social infrastructure site appended to it. Below, you'll learn how to:
+
+- use ```st_nearest_feature``` with ```st_join``` to get these sites.
+
+- visualize this information.
+
+Please try it out on your chosen grid cell case study. Then, think, what kind of interesting information can we extract from this data.frame ```nearesttype```? Think bar charts, frequencies, etc.
+
+```{r, message = FALSE, warning = FALSE}
+# Here's how you might visualize these all together
+# Get the grid cell
+grid <- read_rds("raw_data/grid.rds") %>%
+  filter(cell_id == "Cell 124")
+# Get streets
+streets <- read_rds("raw_data/streets.rds") %>%
+  filter(cell_id == "Cell 124")
+# Get the buildings
+buildings <- read_rds("raw_data/buildings_points.rds") %>%
+  filter(cell_id == "Cell 124")
+
+# Let's make a 1km circle around our grid cell
+buffer <- grid %>% 
+  select(geometry) %>%
+  st_buffer(dist = 1000)
+
+# Let's import ALL the social infrastructure sites located within 1 square kilometers of your grid cell
+sites <- read_rds("raw_data/sites.rds") %>%
+  # Lets zoom in JUST to sites within our 2 km buffer, doing an inner_join (as opposed to a left_join)
+  st_join(buffer, left = FALSE)
+```
+
+Let's visualize it!
+
+```{r}
+g1 <- ggplot() +
+  # Add buffer
+  geom_sf(data = buffer, color = "white", fill = "white", alpha = 0.5) +
+  # Add grid as background
+  geom_sf(data = grid, fill = "black") +
+  # Show streets
+  geom_sf(data = streets, color = "grey") +
+  # Visualize buildings
+  geom_sf(data = buildings, 
+          shape = 21, color = "white", fill = "purple",
+          # Add some attributes to the dot (stroke = how thick the outline is)
+          stroke = 0.25, size = 2, alpha = 0.90) +
+  # Visualize social infrastructure
+  geom_sf(data = sites, 
+          shape = 21, color = "white", fill = "orange",
+          # Add some attributes to the dot (stroke = how thick the outline is)
+          stroke = 0.25, size = 2, alpha = 0.90) +
+  labs(subtitle = "Boston Buildings and Social Infrastructure\nwithin 1 km of city block")
+
+```
+
+
+Let's calculate distances.
+
+```{r}
+# Collect a set of unique identifier pairs for the lines we're about the make
+    # Use expand grid to get a complete set of buildings and sites,
+    # In the same order supplied to st_nearest_points
+mydetails <-  expand_grid(
+      # Grab the building ID
+      buildings %>% as_tibble() %>% select(building_id),
+      # Grab the site id and type
+      sites %>% as_tibble() %>% select(id, name, type))
+
+mydist <- buildings %>%
+  # Please give me lines between my building and every one of our sites
+  st_nearest_points(sites) %>%
+  # Format as an sf object, with the WGS 84 coordinate reference system (code = 4326)
+  # and rename the weird column to geometry
+  st_as_sf(crs = 4326) %>% rename(geometry = x) %>%
+  # Bind in unique identifiers
+  bind_cols(mydetails) %>%
+  # Now calculate the distance of these lines, in meters!
+  mutate(dist = st_length(geometry) %>% as.numeric()) 
+
+```
+
+## They're all a bunch of lines!!!
+```{r}
+g1 + 
+  geom_sf(data = mydist, color = "white", size = 0.2, alpha = 0.1)
+# This might take a while to load.
+```
+
+## Next steps
+
+What can we do with distances? Fun stuff!
+
+### Thresholds
+
+Let's find all the buildings which are within 100 feet of a social infrastructure site.
+
+```{r}
+mydist %>%
+  filter(dist <= 100) %>%
+  as_tibble() %>%
+  group_by(type) %>%
+  summarize(
+    count = n(),
+    total = length(buildings$building_id),
+    percent = n() / total) %>%
+    # and let's upgrade that percent we just made
+  mutate(percent = round(percent * 100, 0) )
+
+# So...
+# 8 out of 309 buildings (3%) are within 100 feet of a community space in Cell 124
+# 123 out of 309 buildings (40%) are within 100 feet of a park in Cell 124
+# 30 out of 309 buildings (10%) are within 100 feet of a place of worship in Cell 124
+# 250 out of 309 buildings (81%) are within 100 feet of a social business in Cell 124
+```
+
+### Overall Trends
+
+Let's visualize the distribution of distances between buildings and social infrastructure.
+For example, we can calculate, for each building, the average distance between that building and every place of worship. 
+
+This shows how much those average distances vary among buildings, depending on the type of social infrastructure.
+
+```{r}
+mydist %>% 
+  as_tibble() %>%
+  group_by(building_id, type) %>%
+  summarize(avgdist = mean(dist, na.rm = TRUE)) %>%
+  ggplot(mapping = aes(x = type, y = avgdist)) +
+  geom_jitter() +
+  geom_violin()
+```
+
+
+
+### Find your Nearest Dunkin Donuts
+
+Remember how we bound in the id, name, and type of each social infrastructure site into our distance edges?
+
+```{r}
+mydist_coffee <- mydist %>%
+  # Zoom into just pairs that include this Dunkin' Donuts site.
+   filter(name == "Dunkin\031 on Huntington") %>%
+   # Categorize buildings based on proximity to dunkin donuts
+  # recode these distances into categories
+  mutate(category = case_when(
+    dist == 0 ~ "Perfection",
+    dist > 0 & dist <= 100 ~ "0-100 m",
+    dist > 100 & dist <= 300 ~ "101-300 m",
+    dist > 300 & dist <= 1000 ~ "301-1000 m",
+    dist > 1000 & dist <= 2000 ~ "1001-2000 m",
+    dist > 2000 ~ "+2000 m")) 
+
+
+mydist_coffee %>% as_tibble() %>% head()
+```
+
+
+```{r}
+# Count how many buildings are within these zones
+mydist_coffee %>%
+  as_tibble() %>%
+  group_by(category) %>%
+  summarize(count = n())
+```
+
+```{r}
+mycoffee <- sites %>%
+  # Zoom into just a Dunkin' Donuts site
+  filter(name == "Dunkin\031 on Huntington") 
+
+mycoffee %>% as_tibble() %>% head()
+```
+
+
+```{r}
+# And visualize it like so!
+ggplot() +
+  geom_sf(data = buffer, fill = "white", color= "white", alpha = 0.25) +
+  geom_sf(data = grid, fill = "black")  +
+  geom_sf(data = streets, color = "grey", alpha = 0.5) +
+  # Show lines to a specific place
+  geom_sf(data = mydist_coffee, color = "orchid", alpha = 0.5) +
+  # Show lines to a specific building
+  geom_sf(data = buildings, fill = "purple",  color = "white",
+          shape = 21, stroke = 0.25, size = 1, alpha = 0.75) +
+  geom_sf(data = mycoffee, color = "red")
+```
+
+
+# 5. Boston: Nearest Social Infrastructure
+
+Next, let's amp this up to estimate our quantities of interest, but for *every* city block. Should be cool!
+
+```{r}
+# Here's how you might visualize these all together
+grid <- read_rds("raw_data/grid.rds") %>%
+  filter(str_detect(milestone, "M1|M2|M3|M4"))
+sites <- read_rds("raw_data/sites.rds") 
+buildings <- read_rds("raw_data/buildings_points.rds")
+streets <- read_rds("raw_data/streets.rds")
+
+
+# Albers Equal Area Conic Projection
+aea <- "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=m +no_defs"
+```
+
+We'll use the same function to get the nearest type of social infrastructure, with ```st_nearest_feature()```.
+
+```{r, eval = FALSE}
+# Identify which sites are closest to each building site
+buildings %>% 
+  st_join(sites %>% select(type), 
+          join = st_nearest_feature) %>%
+  write_rds("raw_data/nearesttype.rds")
+
+# To reduce the total load on our computers,
+# let's get rid of the original buidings dataset
+remove(buildings)
+```
+
+```{r}
+# Nearest type now contains a record of every building in Boston, by grid cells, as well as the type of social infrastructure is is nearest to.
+read_rds("raw_data/nearesttype.rds") %>% head()
+```
+
+## Describing Nearest Sites
+
+Cool! Let's use this to estimate some interesting information. 
+
+### Percentages
+
+For example, what share of buildings in Boston are nearest to what type of social infrastructure?
+
+```{r}
+mytally <- read_rds("raw_data/nearesttype.rds") %>%
+  as_tibble() %>%
+  # For each type of social infrastructure
+  group_by(type) %>%
+  # Count for *how many buildings* that is the closest type of social infrastructure
+  summarize(count = n()) %>%
+  ungroup() %>%
+  # Then calculate a percent, roundeth to the hundreths decimal place
+  mutate(total = sum(count),
+         percent = count / total,
+         percent = paste(round(percent, 2)*100, "%", sep = ""))
+
+# Last, let's plot this as a bar chart.
+library(viridis)
+
+mycolors <- viridis(n = 4, option = "plasma")
+  
+g <- mytally %>%
+  ggplot(mapping = aes(x = reorder(type, -count), y = count, label = percent, 
+                       fill = reorder(type, -count))) +
+  geom_col(color = "#373737") +
+  geom_text(vjust = 0, nudge_y = 500) +
+  scale_fill_manual(values = mycolors,
+                     breaks = c("Community Spaces", "Places of Worship", "Social Businesses", "Parks"),
+                    guide = "none") +
+  labs(subtitle = "Share of Boston Buildings by Cloest Type of Social Infrastructure",
+       x = "Type of Social Infrastructure",
+       y = "% of Boston Buildings",
+       caption = "Note: Each bar shows the percentage of all buildings for whom\ntheir nearest type of social infrastructure is, for example, parks (36%).") +
+  theme_classic(base_size = 14) +
+  theme(panel.border = element_blank(),
+        axis.ticks = element_blank(),
+        plot.caption = element_text(hjust = 0))
+```
+
+```{r, echo = FALSE}
+ggsave(g, filename = "viz/bars.png", dpi = 500, width = 7, height = 5)
+```
+
+### Averages
+
+```{r}
+library(tidyverse)
+library(sf)
+library(viridis)
+
+# Let's calculate the total buildings that are nearest to each type of social infrastructure,
+# In EACH CELL!
+mycount <- read_rds("raw_data/nearesttype.rds") %>%
+  as_tibble() %>%
+  group_by(cell_id, type) %>%
+  summarize(count = n()) %>%
+  ungroup() %>%
+  group_by(cell_id) %>%
+  mutate(total = sum(count))
+
+# Now, let's join that into our grid,
+mygridpercent <- grid %>%
+  as_tibble() %>%
+  # Repeat the grid four types, once per type shown below
+  expand_grid(type = c("Community Spaces", "Places of Worship", "Social Businesses", "Parks")) %>%
+  left_join(by = c("cell_id", "type"), y = mycount) %>%
+  # Get nice percentages for each grid cell
+  mutate(percent = count / total * 100) %>%
+  select(cell_id, type, count, percent, total, pop_density_int, geometry) %>%
+  # If any of these weren't filled in, give it a score of zero (since no buildings)
+  mutate_at(vars(count, percent, total), list(~if_else(is.na(.), 0, as.numeric(.) ))) %>%
+  # convert back to sf format for mapping
+  st_as_sf(crs = 4326) %>%
+  mutate(type = type %>% factor(levels = c(
+    "Community Spaces", "Places of Worship", "Social Businesses", "Parks")))
+
+mygridstats <- mygridpercent %>%
+  as_tibble() %>%
+  group_by(type) %>%
+  summarize(lower = quantile(percent, probs = 0.25, na.rm = TRUE),
+            median = quantile(percent, probs = 0.50, na.rm = TRUE),
+            upper = quantile(percent, probs = 0.75, na.rm = TRUE))
+
+# Finally let's also calculate the number of Boston Buildings analyzed
+myn <- "84829"
+mycells <- grid$cell_id %>% length()
+
+# Let's load some extra visualization packages
+library(viridis)
+library(shadowtext)
+
+g1 <- mygridpercent %>%
+  as_tibble() %>%
+  ggplot(mapping = aes(x = type, y = percent, color = type, fill = type)) +
+  geom_jitter(shape = 21,  color = "black", size = 4, alpha = 0.1) +
+  geom_violin(fill = "white") +
+  geom_crossbar(data = mygridstats, 
+                mapping = aes(x = type, y = median, ymin = lower, ymax = upper, 
+                              fill = type), color = "black", alpha = 0.5) +
+  geom_shadowtext(data = mygridstats,
+                  mapping = aes(x = type, y = median, label = paste(round(median, 0), "%", sep = "")),
+                  # Create a nice white border around our dark grey (#373737) text, with a border radius of 0.2
+                  bg.r = 0.2, bg.color = "white", color = "#373737",
+                  # And make it big (size = 5) and vertically offset just slightly (-0.5)
+                  size = 5, vjust = -0.5) +
+  scale_fill_viridis(discrete = TRUE, option = "plasma", guide = "none") +
+  scale_color_viridis(discrete = TRUE, option = "plasma", guide = "none") +
+  labs(subtitle = paste("Distribution of Nearest Types of Social Infrastructure,",
+                        "\n", "among Boston Buildings in ", mycells, " City Blocks", sep = ""),
+       y = "Percentage of Buildings per 1 sq.km.\nNearest to Type of Social Infrastructure",
+       x = "Type of Social Infrastructure",
+       caption = paste("Calculated for ", mycells, " 1-square-kilometer city blocks in Boston.", sep = "")) +
+  theme_classic(base_size = 14) +
+  theme(panel.border = element_blank(),
+        axis.ticks = element_blank(),
+        plot.caption = element_text(hjust = 0))
+
+g1
+```
+
+
+```{r, echo = FALSE}
+ggsave(g1, filename = "viz/violins.png", dpi = 500, width = 7, height = 5)
+```
+
+### Tile Map
+
+We can also map these percentages, to give us a relative comparison of in which city blocks it is easiest to access each given type of social infrastructure.
+
+```{r, message=FALSE, warning = FALSE}
+g2 <- ggplot() +
+  geom_sf(data = mygridpercent, mapping = aes(fill = percent), color = NA) +
+  geom_sf(data = streets, color = "white", size = 0.1, alpha = 0.8) +
+  facet_wrap(~type, ncol = 4) +
+  scale_fill_viridis(option = "plasma") +
+  scale_x_continuous(expand = expansion(add = c(0,0))) +
+  scale_y_continuous(expand = expansion(add = c(0,0))) +
+  theme_void(base_size = 14) +
+  theme(panel.spacing = unit(0, "cm"),
+        legend.position = "bottom") +
+  guides(fill = guide_colorbar(barwidth = 20, barheight = 1)) +
+  labs(fill = "% of Buildings Nearest\nto Type of Social Infrastructure")
+
+g2
+```
+
+```{r, echo = FALSE}
+ggsave(g2, filename = "viz/tile_map.png", dpi = 500, width = 8, height = 3)
+```
+
+
+### Point Map
+
+
+```{r}
+mycolors <- viridis(n = 4, option = "plasma")
+
+g <- ggplot() +
+# Add grid as background
+  geom_sf(data = grid, color = "#373737", fill = "black") +
+  # Add streets
+  geom_sf(data = streets, color = "grey", size = 0.15, alpha = 0.8) +
+  # Visualize buildings, colored by type of social infrastructure nearest to it
+  geom_sf(data = read_rds("raw_data/nearesttype.rds"), 
+          mapping = aes(fill = type),
+          shape = 21, color = "white", 
+          # Add some attributes to the dot (stroke = how thick the outline is)
+          stroke = 0.1, size = 0.5, alpha = 0.90) +
+  scale_fill_manual(values = mycolors,
+                     breaks = c("Community Spaces", "Places of Worship", "Social Businesses", "Parks")) +
+  labs(fill = "Type of Nearest\nSocial Infrastructure",
+       subtitle = "Boston Buildings by Nearest Social Infrastructure",
+       caption = "Points depict buildings. Empty spots reveal expansive parks, industrial parks, or airport.") +
+  theme_void(base_size = 14) +
+  theme(legend.position = c(0.8, 0.2),
+        panel.background = element_rect(fill = "black"),
+        plot.background = element_rect(fill = "black"),
+        legend.title = element_text(color = "white"),
+        legend.text = element_text(color = "white"),
+        plot.caption = element_text(hjust = 0, color = "white"),
+        plot.subtitle = element_text(color = "white")) +
+  guides(fill = guide_legend(override.aes = list(size = 5)))
+```
+
+```{r, eval = FALSE, echo = FALSE}
+dir.create("viz")
+ggsave(plot = g + labs(caption = NULL, subtitle = NULL) + ggpubr::bgcolor(color = "black"), 
+       filename = "viz/pointmap.png", dpi = 500, width = 5, height = 5)
+```
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE, out.width = "100%"}
+knitr::include_graphics("viz/pointmap.png", dpi = 100)
+```
+
+# 6. Boston: Average Distance
+
+## Get Distance
+
+Next, let's try to replicate the distance analysis for every cell.
+
+
+```{r, message = FALSE, warning = FALSE}
+# Here's how you might visualize these all together
+# Get the grid cell
+grid <- read_rds("raw_data/grid.rds") 
+
+# Let's make a series of buffer zones around our grid cells.
+
+# Let's make a 1km circle around our grid cells
+buffer <- grid %>% 
+  select(buffer_id = cell_id, geometry) %>%
+  st_buffer(dist = 1000)
+```
+
+For example, we can see the shape of that buffer below!
+```{r}
+ggplot() +
+  geom_sf(data = buffer) +
+  geom_sf(data = grid, fill = NA, color = "white")
+```
+
+Next, let's get a jumbo dataset, where each row indicates a site-buffer pair, showing every site that fell into every buffer. (In other words, some sites will show up multiple times, captured by multiple buffers. That's okay - that's intended.) Let's also import our buildings, to make a gigantic dataset of building-buffer pairs. It's not clear which size of buffer we need, so we're going to do a bunch, all in a loop.
+
+```{r, eval = FALSE, message = FALSE}
+get_buffer = function(mydistance){
+  # Let's make an ZZZZ circle around our grid cells
+  buffer <- grid %>% 
+    select(buffer_id = cell_id, geometry) %>%
+    # Specify the distance of the perimeter, using 'mydistance'
+    st_buffer(dist = mydistance)
+  
+  # Let's import ALL the social infrastructure sites located within 1 square kilometers of each grid cell
+  read_rds("raw_data/sites.rds") %>%
+    # Lets zoom in JUST to sites overlapping our 1 km buffer, doing an inner_join (as opposed to a left_join)
+    st_join(buffer, left = FALSE) %>%
+    # Let's keep a copy
+    write_rds(paste("raw_data/buffer_sites_", mydistance, ".rds", sep = ""))
+  
+  read_rds("raw_data/buildings_points.rds") %>%
+    # Each matched to a buffer!
+    # Lets zoom in JUST to sites overlapping our 1 km buffer, doing an inner_join (as opposed to a left_join)
+    st_join(buffer, left = FALSE) %>%
+    # let's keep a copy just in case
+    write_rds(paste("raw_data/buffer_buildings_", mydistance, ".rds", sep = ""))
+  
+  # Now save the buffer to file, in case we need it.
+  buffer %>%
+    write_rds(paste("raw_data/buffer_", mydistance, ".rds", sep = ""))
+  
+}
+
+# Run the loop for 0, 100, 500, 1000, 1500, and 2000 meter buffers
+c(0, 100, 500, 1000, 1500, 2000) %>%
+  map(~get_buffer(.))
+
+```
+
+Now, we're going to do something called a ```function.``` In a function, we write a loop of code that we ask the computer to do several times in a row, given an input. Only the input changes, so your choice of input matters - in this case, we will supply the function with each of our differnt ```buffer_id```, so that we can run this code many times, once per buffer.
+
+```{r, eval = FALSE}
+get_distance = function(mybuffer_id){
+  require(tidyverse)
+  require(sf)
+
+  # Show progress
+  print(mybuffer_id)
+  
+  # Import our subset data
+  samplebuildings <- buildings %>%
+    # Zoom into just buildings within our cell of interest
+    filter(cell_id %in% mybuffer_id)
+  
+  samplesites <- sites %>%
+    # Zoom into just sites within our the buffer of our cell of interest
+    filter(buffer_id %in% mybuffer_id) %>% 
+    select(id, type)
+  
+  # If we have any valid data in this cell to analyze, then do the following:
+  if(length(samplebuildings$building_id) > 0 & length(samplesites$id) > 0){
+  # Collect a set of unique identifier pairs for the lines we're about the make
+  # Use expand grid to get a complete set of buildings and sites,
+  # In the same order supplied to st_nearest_points
+  mydetails <-  expand_grid(
+    # Grab the building ID
+    samplebuildings %>% as_tibble() %>% select(building_id),
+    # Grab the site id and type
+    samplesites %>% as_tibble() %>% select(id, type))
+  
+  
+  mylines <- samplebuildings %>%
+    # Please give me lines between my building and every one of our sites
+    st_nearest_points(samplesites) %>%
+    # Format as an sf object, with the WGS 84 coordinate reference system (code = 4326)
+    # and rename the weird column to geometry
+    st_as_sf(crs = 4326) %>% rename(geometry = x) %>%
+    # Now calculate the distance of these lines, in meters!
+    mutate(dist = st_length(geometry) %>% as.numeric()) %>%
+    as_tibble() %>%
+    select(dist) %>%
+    # Bind in unique identifiers
+    bind_cols(mydetails %>% select(building_id, type))
+  
+  mylines %>%
+    # For each type, per grid cell buffer,
+    group_by(building_id, type) %>%
+    # Calculate median distance using 10 thresholds,
+    summarize(
+      # let's get median distance as crow flies between buildings in this block 
+      # and social infrastructure of this type 
+      # within 100 feet of that building
+      dist100 = median(dist[dist <= 100], na.rm = TRUE),
+      # within 200 feet of that building
+      dist200 = median(dist[dist <= 200], na.rm = TRUE),
+      # within 300 feet of that building
+      dist300 = median(dist[dist <= 300], na.rm = TRUE),
+      # within 400 feet of that building
+      dist400 = median(dist[dist <= 400], na.rm = TRUE),
+      # et cetera
+      dist500 = median(dist[dist <= 500], na.rm = TRUE),
+      dist600 = median(dist[dist <= 600], na.rm = TRUE),
+      dist700 = median(dist[dist <= 700], na.rm = TRUE),
+      dist800 = median(dist[dist <= 800], na.rm = TRUE),
+      dist900 = median(dist[dist <= 900], na.rm = TRUE),
+      dist1000 = median(dist[dist <= 1000], na.rm = TRUE),
+      # Also be sure to use no threshold once too
+      dist = median(dist, na.rm = TRUE),
+      
+      # Let's also count the total sites that fall into that area!
+      count100 = sum(!is.na(type[dist <= 100]), na.rm = TRUE),
+      # within 200 feet of that building
+      count200 = sum(!is.na(type[dist <= 200]), na.rm = TRUE),
+      # within 300 feet of that building
+      count300 = sum(!is.na(type[dist <= 300]), na.rm = TRUE),
+      # within 400 feet of that building
+      count400 = sum(!is.na(type[dist <= 400]), na.rm = TRUE),
+      # et cetera
+      count500 = sum(!is.na(type[dist <= 500]), na.rm = TRUE),
+      count600 = sum(!is.na(type[dist <= 600]), na.rm = TRUE),
+      count700 = sum(!is.na(type[dist <= 700]), na.rm = TRUE),
+      count800 = sum(!is.na(type[dist <= 800]), na.rm = TRUE),
+      count900 = sum(!is.na(type[dist <= 900]), na.rm = TRUE),
+      count1000 = sum(!is.na(type[dist <= 1000]), na.rm = TRUE),
+      # Also be sure to use no threshold once too
+      count = sum(!is.na(type), na.rm = TRUE),
+      
+      # Finally, let's append that buffer ID
+      buffer_id = mybuffer_id) %>%
+    ungroup() %>%
+    # Write that cell to file
+    write_rds(paste("count/", mybuffer_id, ".rds", sep = ""))
+  
+  }
+}
+
+get_distance %>%
+  write_rds("raw_data/get_distance_function.rds")
+remove(grid, buffer) 
+```
+
+Finally, let's run the loop!
+
+```{r, eval = FALSE}
+# First, let's load our data in.
+buildings <- read_rds("raw_data/buildings.rds") %>%
+  st_join(read_rds("raw_data/grid.rds") %>% select(cell_id))
+buffer <- read_rds("raw_data/buffer_1000.rds")
+sites <- read_rds("raw_data/buffer_sites_1000.rds") %>% select(id, type, buffer_id)
+get_distance <- read_rds("raw_data/get_distance_function.rds")
+
+# Make a folder to hold our results
+dir.create("count")
+
+# Note: I wouldn't recommend running this code. 
+# It took me about 25 minute with 8GB of RAM. 
+# A usual RStudio Cloud Project has 1 GB of RAM.
+
+library(tidyverse)
+library(sf)
+library(future)
+library(furrr)
+
+plan("multisession")
+
+buffer$buffer_id %>%
+#done <- str_remove(dir("count"), ".rds")
+#buffer$buffer_id[!buffer$buffer_id %in% done] %>%
+  furrr::future_map(~get_distance(.), .progress = TRUE)
+
+plan("sequential")
+
+# Now bind the results together into one data.frame
+dir("count", full.names = TRUE) %>%
+  map_dfr(~read_rds(.)) %>%
+  write_rds("raw_data/buffer_dist.rds")
+```
+
+```{r}
+rm(list = ls())
+```
+
+
+
+## Get Land Value and Type
+
+Let's also grab, as covariates, the type of zoning for each building and the cost of that building.
+
+```{r, eval = FALSE}
+library(tidyverse)
+library(sf)
+
+# https://data.boston.gov/dataset/property-assessment/resource/c4b7331e-e213-45a5-adda-052e4dd31d41?inner_span=True
+
+read_csv("https://data.boston.gov/dataset/e02c44d2-3c64-459c-8fe2-e1ce5f38a035/resource/c4b7331e-e213-45a5-adda-052e4dd31d41/download/data2021-full.csv") %>% 
+  magrittr::set_colnames(value = names(.) %>% tolower() %>% str_replace_all(" ", "_")) %>%
+  select(pid, lu, own_occ, 
+         total_value,land_value, bldg_value,
+         gross_area, land_area = land_sf, bldg_area = living_area, 
+         gross_tax, yr_built,yr_remodel, overall_cond) %>%
+  # Convert land value to numeric, and calculate total value per square foot (of land and property)
+  mutate_at(vars(total_value, land_value, bldg_value, gross_tax), list(~parse_number(.))) %>%
+  # Convert categories to factor!
+  mutate_at(vars(own_occ, lu, overall_cond), list(~factor(.))) %>%
+     mutate(lu = lu %>% recode_factor(
+    "A" = "Apartment Building (7 or more units)",
+    "AH" = "Agricultural/Horticultural",
+    "C" = "Commericial",
+    "CC" = "Commercial Condo",
+    "CD" = "Residential Condo",
+    "CL" = "Commercial Land",
+    "CM" = "Condo main structure",
+    "CP" = "Condo parking",
+    "E" = "Tax-Exempt",
+    "EA" = "Tax-Exempt (blighted)",
+    "I" = "Industrial",
+    "R1" = "Residential 1-family",
+    "R2" = "Residential 2-family",
+    "R3" = "Residential 3-family",
+    "R4" = "Residential 4+family",
+    "RC" = "Mixed use",
+    "RL" = "Residential Land")) %>%
+    # Recode variable to an ordinal scale from 1 (unsound) to 8 (excellent)
+   mutate(overall_cond = overall_cond %>% recode_factor(
+    "EX - Excellent" = "8",
+    "E - Excellent" = "8",
+    "VG - Very Good" = "7",
+    "G - Good" = "6",
+    "AVG - Default - Average" = "5",
+    "A - Average" = "5",
+    "F - Fair" = "4",
+    "P - Poor" = "3",
+    "VP - Very Poor" = "2",
+    "US - Unsound" = "1") %>% as.character() %>% as.numeric()) %>%
+  # Turn owner occupied into a binary variable
+  mutate(own_occ = if_else(own_occ == "Y", true = 1, false = 0, missing = NA_real_)) %>%
+  # Calculate cost per square foot
+  mutate(cost_sqft = total_value / gross_area) %>%
+  # A couple records were duplicated. Take the median of each
+  group_by(pid) %>%
+  summarize(lu = unique(lu),
+            own_occ = median(own_occ, na.rm = TRUE),
+            cost_sqft = median(cost_sqft, na.rm = TRUE),
+            overall_cond = median(overall_cond, na.rm = TRUE),
+            yr_built = median(yr_built, na.rm = TRUE),
+            gross_tax = median(gross_tax, na.rm = TRUE)) %>%
+  ungroup() %>%
+  write_rds("raw_data/buildings_value.rds")
+```
+
+
+## Get Transit
+
+We're also going to estimate distance of all buildings from the nearest bus and train stop.
+
+```{r, eval = FALSE}
+library(tidyverse)
+library(sf)
+
+train <- read_sf("raw_data/transit/MBTA_NODE.shp") %>%
+  st_transform(crs = 4326) %>% select(station = STATION, line = LINE) %>%
+  # make an extra geometry column
+  mutate(geo_transit = geometry) 
+
+bus <- read_sf("raw_data/transit/MBTABUSSTOPS_PT.shp") %>%
+  st_transform(crs = 4326) %>% 
+  select(stop_id = STOP_ID) %>%
+  # make an extra geometry column
+  mutate(geo_transit = geometry)
+
+buildings <- read_rds("raw_data/buildings_points.rds") %>%
+  rename(geo_building = geometry)
+
+# Identify which train stop is closest to each building site
+buildings %>%
+  st_join(train, join = st_nearest_feature) %>%
+  # Next, we're going to bind in the coordinates of 
+  bind_cols(st_coordinates(.$geo_building) %>% as_tibble() %>% select(x1 = 1, y1 = 2),
+            st_coordinates(.$geo_transit) %>% as_tibble() %>% select(x2 = 1, y2 = 2)) %>%
+  # Filter out any locations that aren't quite right
+  #filter(!is.na(x1) & !is.na(y1) & !is.na(x2) & !is.na(y2)) %>%
+  select(building_id, line, x1:y2) %>%
+  # Make a linestring
+  mutate(geometry = sprintf("LINESTRING(%s %s, %s %s)", x1, y1, x2, y2)) %>%
+  as_tibble() %>%
+  select(building_id, line, geometry) %>%
+  st_as_sf(wkt = "geometry", crs = 4326) %>%
+  # And, let's calculate how far away it is!
+  mutate(dist = st_length(geometry) %>% as.numeric()) %>%
+  as_tibble() %>%
+  select(building_id, train_dist = dist, train_nearest = line) %>%
+  write_rds("raw_data/buildings_train.rds")
+
+
+# Identify which bus stops is closest to each building site
+buildings %>%
+  st_join(bus, join = st_nearest_feature) %>%
+  # Next, we're going to bind in the coordinates of 
+  bind_cols(st_coordinates(.$geo_building) %>% as_tibble() %>% select(x1 = 1, y1 = 2),
+            st_coordinates(.$geo_transit) %>% as_tibble() %>% select(x2 = 1, y2 = 2)) %>%
+  # Filter out any locations that aren't quite right
+  #filter(!is.na(x1) & !is.na(y1) & !is.na(x2) & !is.na(y2)) %>%
+  select(building_id, stop_id, x1:y2) %>%
+  # Make a linestring
+  mutate(geometry = sprintf("LINESTRING(%s %s, %s %s)", x1, y1, x2, y2)) %>%
+  as_tibble() %>%
+  select(building_id, stop_id, geometry) %>%
+  st_as_sf(wkt = "geometry", crs = 4326) %>%
+  # And, let's calculate how far away it is!
+  mutate(dist = st_length(geometry) %>% as.numeric()) %>%
+  as_tibble() %>%
+  select(building_id, bus_dist = dist, bus_nearest = stop_id) %>%
+  write_rds("raw_data/buildings_bus.rds")
+
+train <- read_rds("raw_data/buildings_train.rds")
+bus <- read_rds("raw_data/buildings_bus.rds")
+
+# The codes are identical, so we can bind_cols()
+# sum(train$building_id == bus$building_id)
+bind_cols(train, bus %>% select(bus_dist, bus_nearest)) %>%
+  # Where we can access distance to closest bus or train
+  write_rds("raw_data/buildings_transit.rds")
+
+rm(list = ls())
+```
+
+## Get Buildings Data
+
+```{r, eval = FALSE}
+library(tidyverse)
+grid <- read_rds("raw_data/grid.rds") %>%
+  as_tibble() %>%
+  select(-geometry) %>%
+  mutate(neighborhood = na_if(neighborhood, "")) %>%
+  mutate(neighborhood = if_else(is.na(neighborhood), "Other", neighborhood))
+
+dat <- read_rds("raw_data/buildings_value.rds") 
+
+transit <- read_rds("raw_data/buildings_transit.rds") %>%
+  # There were a couple of duplicates;
+  # let's take the smallest distance to compensate
+  group_by(building_id) %>%
+  summarize(train_dist = min(train_dist, na.rm = TRUE),
+            bus_dist = min(bus_dist, na.rm = TRUE)) %>%
+  ungroup()
+
+
+mydist <- read_rds("raw_data/buffer_dist.rds") %>%
+  # There are 275 builings in Boston that are unlabelled. We will just remove them.
+  filter(nchar(building_id) > 1) %>%
+  # Collect the following variables, telling us...
+  # This building in THAT CELL was a median of this far away from social infrastructure sites of TYPE X within THAT RADIUS?
+  select(cell_id = buffer_id, building_id, type, dist = dist1000) %>%
+  mutate(type = type %>% recode_factor(
+    "Community Spaces" = "community",
+    "Places of Worship" = "worship",
+    "Social Businesses" = "social", 
+    "Parks" = "parks")) %>%
+  pivot_wider(id_cols = c(building_id, cell_id), names_from = type, values_from = dist)  %>%
+   # Some buildings got caught in multiple grid cells, presumably because they site at the cross between several lines
+  # # eg. building_id == "Bos_0104067000_B0" is in Cell 184, CEll 185, Cell 195, and Cell 196's buffer.
+  # However, THANK GOODNESS, their distance measurements are all the same.
+  # so, we're just going to consolidate them into unique records, 
+  group_by(building_id) %>%
+  summarize(
+    # Get the modal cell,
+    cell_id = cell_id %>% table() %>% sort(decreasing = TRUE) %>% names() %>% .[1],
+    # and taking the median of their entries
+    community = median(community, na.rm = TRUE),
+    parks = median(parks, na.rm = TRUE),
+    worship = median(worship, na.rm = TRUE),
+    social = median(social, na.rm = TRUE)) %>%
+  ungroup() %>%
+  left_join(by = "cell_id", y = grid %>%
+  select(cell_id, neighborhood, pop_density_int, pop_white, pop_black, pop_hisplat, pop_asian,
+         pop_some_college, median_income, income_inequality, median_monthly_housing_cost))  %>%
+  # Get the unique building code.
+  # Some buildings have multiple entries, as a B0 & B1 (It only happens rarely, so this describes places that have extensions large enough to render themselves their own polygons.)
+  mutate(id = str_extract(building_id, pattern = "[0-9]+")) %>%
+  # Now join in Property Records
+  left_join(by = c("id" = "pid"), y = dat) %>% 
+# 89999
+  # Now join in distance to public transit
+  left_join(by = "building_id", y = transit) %>% 
+  # Save to file
+  write_rds("building_dist_dataset.rds")
+
+rm(list=ls())
+
+
+```
+
+### Correlation Matrix
+
+```{r,fig.height=7, fig.height = 7}
+library(GGally)
+library(tidyverse)
+
+mydat <- read_rds("building_dist_dataset.rds") %>%
+  # Filter to sites within boston neighborhoods
+  filter(neighborhood != "Other")
+
+viz <- mydat %>%
+  mutate_at(vars(social, community, parks, worship), list(~.^2)) %>%
+  select(community, worship, social,parks, 
+         pop_density_int, pop_black, pop_hisplat, pop_asian,
+         pop_some_college, median_income, income_inequality, median_monthly_housing_cost, #lu, 
+         train_dist, bus_dist, overall_cond, own_occ, yr_built, gross_tax, cost_sqft) %>%
+  GGally::ggcorr(hjust = 1, label = TRUE, label_color = "#373737",
+                 digits = 1, hjust = 1, layout.exp = 5) %>%
+  with(data) %>%
+  mutate_at(vars(x, y), list(~factor(.) %>% recode_factor(
+    "community" = "Community Spaces",
+    "worship" = "Places of Worship",
+    "social" = "Social Businesses",
+    "parks" = "Parks",
+    "pop_density_int" = "Pop. Density",
+    "pop_black" = "% Black",
+    "pop_hisplat" = "% Hispanic/Latino",
+    "pop_asian" = "% Asian",
+    "pop_some_college" = "% Some College",
+    "median_income" = "Median Income",
+    "income_inequality" = "Income Inequality",
+    "median_monthly_housing_cost" = "Median Monthly Housing Cost",
+    "train_dist" = "Distance to Train",
+    "bus_dist" = "Distance to Bus",
+    "overall_cond" = "Building Condition",
+    "own_occ" = "Owner Occupied",
+    "yr_built" = "Year Built",
+    "gross_tax" = "Gross Tax",
+    "cost_sqft" = "Cost per sq. ft."))) %>%
+  mutate(xnum = as.numeric(x),
+         ynum = as.numeric(y)) 
+
+g1 <- viz %>%
+  ggplot(mapping = aes(x = reorder(x, xnum), y = y, fill = coefficient, label = label)) +
+  geom_tile() +
+  geom_text() +
+  geom_tile(data = . %>% filter(abs(coefficient) >= 0.75),
+            fill = NA, color = "black", size = 1) +
+  scale_fill_gradient2(low = "#DC267F", mid = "white",
+                       high = "#648FFF", midpoint = 0,
+                       limits = c(-1, 1),
+                       breaks = c(-1, -0.75, -0.5, -0.25, 0, .25, 0.5, 0.75, 1)) +
+  labs(caption = "Note: Black squares denote correlation over +/-0.75.\nParks, Social Businesses, Places of Worship, and Community Spaces refer to median distance to locations.",
+       fill = "Pearson's r\nCorrelation Coefficient") +
+  theme_classic(base_size = 14) +
+  scale_y_discrete(position = "right", expand = expansion(0)) +
+  scale_x_discrete(position = "bottom", expand = expansion(0)) +
+  labs(x = NULL, y = NULL) +
+  theme(legend.position = "bottom",
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        plot.caption = element_text(size = 12, hjust = 0),
+        legend.title = element_text(size = 12, hjust = 0),
+        axis.text.y.right = element_text(hjust = 0),
+        axis.text.x.bottom = element_text(hjust = 0, angle = -30)) +
+  guides(fill = guide_colorsteps(barwidth = 20, barheight = 2)) +
+  coord_fixed(ratio = 1)
+```
+
+```{r, echo = FALSE, warning = FALSE, message=  FALSE}
+ggsave(g1, filename = "viz/corrmatrix.png", dpi = 500, width = 8, height = 8.5)
+```
+
+```{r, echo = FALSE, warning = FALSE, message=FALSE, out.width = "100%"}
+knitr::include_graphics("viz/corrmatrix.png", dpi = 100)
+```
+
+Looks like median income and median monthly housing cost can't be in the same model here. Other than that, we're doing pretty good!
+
+
+### Designing a Model sans Collinearity
+
+```{r}
+mydat <- read_rds("building_dist_dataset.rds") %>%
+  # Filter to sites within boston neighborhoods
+  filter(neighborhood != "Other")
+# What kinds of places end up with closer access to social infrastructure?
+m0 <- mydat %>%
+  lm(formula = I(community^2) ~ pop_density_int + 
+       # Race, education, and income are deeply correlated in Boston.
+       # To keep collinearity below the VIF < 10 threshold,
+       # we use just one variable for race - share of white residents
+       # and split it into evenly sized quartiles as a numeric variable
+       # We also log-transformed median income, since it was right skewed
+       ntile(pop_white, 4) + log(median_income) + #income_inequality + 
+       # We also log transformed distance variables, since they were right skewed
+       log(train_dist) + log(bus_dist) + 
+       # We also log transformed the building value, for right skew
+       log(cost_sqft) + overall_cond + own_occ + yr_built + lu +  
+      # It's not possible to control for grid cells, due to high collinearity,
+      # But we added fixed effects for neighborhood to adjust 
+      # for some natural geographic correlation
+      neighborhood)
+
+m0 %>% car::vif() %>% .^2
+
+# Here's what the quartiles look like
+mydat %>%
+  group_by(breaks = ntile(pop_white, 4)) %>%
+  summarize(lower = min(pop_white, na.rm = TRUE),
+            upper = max(pop_white, na.rm = TRUE))
+
+
+rm(list = ls())
+```
+
+### Run Models
+
+```{r, eval = FALSE}
+mydat <- read_rds("building_dist_dataset.rds") %>%
+    filter(neighborhood != "Other")
+# Distance to Community Spaces
+m1 <- mydat %>%
+  lm(formula = I((community/1000)^2) ~ pop_density_int + 
+       ntile(pop_white, 4) + log(median_income) + neighborhood)
+
+#-12.33
+m2 <- mydat %>%
+  lm(formula = I((community/1000)^2) ~ pop_density_int + 
+       ntile(pop_white, 4) + log(median_income) + neighborhood +
+       log(train_dist) + log(bus_dist) + log(cost_sqft))
+m3 <- mydat %>%
+  lm(formula = I((community/1000)^2) ~ pop_density_int + 
+       ntile(pop_white, 4) + log(median_income) + neighborhood +
+       log(train_dist) + log(bus_dist) + log(cost_sqft) + 
+       lu + overall_cond + own_occ + yr_built)
+# Distance to Places of Worship
+m4 <- mydat %>%
+  lm(formula = I((worship/1000)^2) ~ pop_density_int + 
+       ntile(pop_white, 4) + log(median_income) + neighborhood)
+m5 <- mydat %>%
+  lm(formula = I((worship/1000)^2) ~ pop_density_int + 
+       ntile(pop_white, 4) + log(median_income) + neighborhood +
+       log(train_dist) + log(bus_dist) + log(cost_sqft))
+m6 <- mydat %>%
+  lm(formula = I((worship/1000)^2) ~ pop_density_int + 
+       ntile(pop_white, 4) + log(median_income) + neighborhood +
+       log(train_dist) + log(bus_dist) + log(cost_sqft) + 
+       lu + overall_cond + own_occ + yr_built)
+
+# Distance to Social Businesses
+m7 <- mydat %>%
+  lm(formula = I((social/1000)^2) ~ pop_density_int + 
+       ntile(pop_white, 4) + log(median_income) + neighborhood)
+m8 <- mydat %>%
+  lm(formula = I((social/1000)^2) ~ pop_density_int + 
+       ntile(pop_white, 4) + log(median_income) + neighborhood +
+       log(train_dist) + log(bus_dist) + log(cost_sqft))
+m9 <- mydat %>%
+  lm(formula = I((social/1000)^2) ~ pop_density_int + 
+       ntile(pop_white, 4) + log(median_income) + neighborhood +
+       log(train_dist) + log(bus_dist) + log(cost_sqft) + 
+       lu + overall_cond + own_occ + yr_built)
+
+# Distance to Parks
+m10 <- mydat %>%
+  lm(formula = I((parks/1000)^2) ~ pop_density_int + 
+       ntile(pop_white, 4) + log(median_income) + neighborhood)
+m11 <- mydat %>%
+  lm(formula = I((parks/1000)^2) ~ pop_density_int + 
+       ntile(pop_white, 4) + log(median_income) + neighborhood +
+       log(train_dist) + log(bus_dist))
+m12 <- mydat %>%
+  lm(formula = I((parks/1000)^2) ~ pop_density_int + 
+       ntile(pop_white, 4) + log(median_income) + neighborhood +
+       log(train_dist) + log(bus_dist) + log(cost_sqft) + 
+       lu + overall_cond + own_occ + yr_built)
+
+get_vif = function(mymodel){
+  mymodel %>% car::vif() %>% .^2 %>% .[,3] %>% max()
+}
+
+# Calculate VIF for every model, in a list
+list(m1,m2,m3,m4,m5,m6,m7,m8,m9, m10,m11,m12) %>% 
+  map(~get_vif(.)) %>%
+  write_rds("raw_data/myvif.rds")
+
+# Extract model details, in a list
+list(m1,m2,m3,m4,m5,m6,m7,m8,m9, m10,m11,m12) %>% 
+  map(~texreg::extract(.)) %>%
+  write_rds("raw_data/mymodels.rds")
+
+rm(list = ls())
+```
+
+### Model Table
+
+```{r, message=FALSE, warning = FALSE}
+mymodels <- read_rds("raw_data/mymodels.rds")
+myvif <- read_rds("raw_data/myvif.rds")
+
+texreg::htmlreg(
+  mymodels,
+  custom.header = list("Median Distance (Squared) to<br>Community Spaces" = 1:3,
+                       "Median Distance (Squared) to<br>Places of Worship" = 4:6,
+                       "Median Distance (Squared) to<br>Social Businesses" = 7:9,
+                       "Median Distance (Squared) to<br>Parks" = 10:12),
+  custom.model.names = c(
+    "Model 1<br>Area Traits",
+    "Model 2<br>Amenities",
+    "Model 3<br>Extended Controls",
+    "Model 4<br>Area Traits",
+    "Model 5<br>Amenities",
+    "Model 6<br>Extended Controls",
+    "Model 7<br>Area Traits",
+    "Model 8<br>Amenities",
+    "Model 9<br>Extended Controls",
+    "Model 10<br>Area Traits",
+    "Model 11<br>Amenities",
+    "Model 12<br>Extended Controls"),
+  bold = 0.10, stars = c(0.001, 0.01, 0.05, 0.1),
+  custom.gof.rows = list("Max VIF" = myvif %>% unlist()),
+  omit.coef = "neighborhood",
+  caption.above = TRUE,
+  caption = "<b>Ordinary Least Squares Models of Boston Buildings (n = 85,592)</b>
+  <br>
+  <b>Dependent Variable<b>: Median Distance Squared from Buildings to Nearby Social Infrastructure, measured in kilometers.",
+  custom.note = "<b>Statistical Significance</b>: *** p < 0.001, ** p < 0.01, * p < 0.05, . p < 0.10.
+  <br>
+  <b>Fixed Effects:</b> All models include 17 fixed effects for neighborhood, including East Boston, Charleston, Beacon Hill, Downtown, South Boston, South End, Fenway/Kenmore, Back Bay, Roxbury, Mission Hill, Dorchester, Jamaica Plain, Mattapan, Hyde Park, Roslindale, West Roxbury, and Allston/Brighton."
+) %>%
+  htmltools::HTML()
+```
+
+### Simulation
+
+```{r, eval = FALSE}
+library(tidyverse)
+library(Zelig)
+library(viridis)
+
+mydat <- read_rds("building_dist_dataset.rds") %>%
+  filter(neighborhood != "Other") %>%
+  mutate(pop_white = ntile(pop_white, 4)) %>%
+  mutate_at(vars(neighborhood, lu), list(~factor(.)))
+
+# Let's run each model in Zelig format
+
+z1 <- mydat %>%
+  zelig(formula = I((community/1000)^2) ~ pop_density_int + 
+       pop_white + log(median_income) + neighborhood +
+       log(train_dist) + log(bus_dist) + log(cost_sqft) + 
+       lu + overall_cond + own_occ + yr_built, model = "ls")
+
+z2 <- mydat %>%
+  zelig(formula = I((worship/1000)^2) ~ pop_density_int + 
+       pop_white + log(median_income) + neighborhood +
+       log(train_dist) + log(bus_dist) + log(cost_sqft) + 
+       lu + overall_cond + own_occ + yr_built, model = "ls")
+
+z3 <- mydat %>%
+  zelig(formula = I((social/1000)^2) ~ pop_density_int + 
+       pop_white + log(median_income) + neighborhood +
+       log(train_dist) + log(bus_dist) + log(cost_sqft) + 
+       lu + overall_cond + own_occ + yr_built, model = "ls")
+
+z4 <- mydat %>%
+  zelig(formula = I((parks/1000)^2) ~ pop_density_int + 
+       pop_white + log(median_income) + neighborhood +
+       log(train_dist) + log(bus_dist) + log(cost_sqft) + 
+       lu + overall_cond + own_occ + yr_built, model = "ls")
+
+
+
+# Here's what the quartiles look like
+mystat <- read_rds("building_dist_dataset.rds") %>%
+  filter(neighborhood != "Other") %>%
+  group_by(breaks = ntile(pop_white, 4)) %>%
+  summarize(lower = min(pop_white, na.rm = TRUE),
+            median = median(pop_white, na.rm = TRUE),
+            upper = max(pop_white, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(label = paste(round(lower*100, 0), "-", round(upper*100, 0), "%", sep = ""))
+
+
+# Get rid of unnecessary data
+remove(mydat)
+
+bind_rows(
+  z1 %>% 
+    setx(pop_white = seq(from = 0, to = 5, length.out = 21)) %>% sim() %>%
+    zelig_qi_to_df() %>%
+    select(x = pop_white, ev = expected_value) %>%
+    mutate(type = "community"),
+  z2 %>% 
+    setx(pop_white = seq(from = 0, to = 5, length.out = 21)) %>% sim() %>%
+    zelig_qi_to_df() %>%
+    select(x = pop_white, ev = expected_value) %>%
+    mutate(type = "worship"),
+  z3 %>% 
+    setx(pop_white = seq(from = 0, to = 5, length.out = 21)) %>% sim() %>%
+    zelig_qi_to_df() %>%
+    select(x = pop_white, ev = expected_value) %>%
+    mutate(type = "social"),
+  z4 %>% 
+    setx(pop_white = seq(from = 0, to = 5, length.out = 21)) %>% sim() %>%
+    zelig_qi_to_df() %>%
+    select(x = pop_white, ev = expected_value) %>%
+    mutate(type = "parks")) %>%
+  mutate(type = type %>% recode_factor(
+    "community" = "Community Spaces",
+    "worship" = "Places of Worship",
+    "social" = "Social Businesses",
+    "parks" = "Parks")) %>%
+  group_by(type, x) %>%
+  summarize(lower_ci = quantile(ev, probs = 0.025),
+            estimate = quantile(ev, probs = 0.50),
+            upper_ci = quantile(ev, probs = 0.975)) %>%
+  # Get better positions
+  left_join(by = c("x" = "breaks"), y = mystat)  %>%
+  # Transform the result back into meters, not kilometers squared 
+  mutate_at(vars(estimate, lower_ci, upper_ci), list(~sqrt(.)*1000)) %>%
+  ungroup() %>%
+  write_rds("raw_data/mysim.rds")
+
+
+# Next, let's gather first differences,
+# Calculating the difference in median distance squared
+# for a building where pop_white = 4 vs. pop_white = 1
+get_fd = function(mysimulation){
+  data.frame(fd = mysimulation$sim.out$x1$fd %>% unlist(),
+             x1 = mysimulation$sim.out$x1$ev %>% unlist(),
+             x = mysimulation$sim.out$x$ev %>% unlist()) %>%
+    return()
+}
+# Let's write a quick function to extract first differences
+bind_rows(
+  z1 %>% 
+    sim(., x = setx(., pop_white = 1), x1 = setx1(., pop_white = 4))  %>%
+    get_fd() %>%
+    mutate(type = "community"),
+  z2 %>% 
+    sim(., x = setx(., pop_white = 1), x1 = setx1(., pop_white = 4))  %>%
+    get_fd() %>%
+    mutate(type = "worship"),
+  z3 %>% 
+    sim(., x = setx(., pop_white = 1), x1 = setx1(., pop_white = 4))  %>%
+    get_fd() %>%
+    mutate(type = "social"),
+  z4 %>% 
+    sim(., x = setx(., pop_white = 1), x1 = setx1(., pop_white = 4))  %>%
+    get_fd() %>%
+    mutate(type = "parks")) %>%
+  mutate(type = type %>% recode_factor(
+    "community" = "Community Spaces",
+    "worship" = "Places of Worship",
+    "social" = "Social Businesses",
+    "parks" = "Parks")) %>% 
+  # Back transform the simulated outcomes
+  mutate_at(vars(x, x1), list(~sqrt(.)*1000)) %>%
+  # Recalculate the first differences
+  mutate(fd = x1 - x) %>%
+  group_by(type) %>%
+  summarize(
+    estimate = quantile(fd, probs = 0.50),
+    lower_ci = quantile(fd, probs = 0.025),
+    upper_ci = quantile(fd, probs = 0.975),
+    # Actual simulated SE
+    sd = sd(fd, na.rm = TRUE),
+    # Approximated from confidence interval,
+    # assuming normal distribution
+    se = (upper_ci - lower_ci) / (2*1.96),
+    # se and sd are very close, so let's use sd, which is more accurate
+    z = estimate / sd,
+    p = exp(-0.717*z - 0.416*z^2),
+    stars = gtools::stars.pval(p),
+    estimate_label = round(estimate, 1),
+    estimate_label = if_else(estimate > 0, 
+                             true = paste("+", estimate_label, sep = ""),
+                             false = paste(estimate_label)),
+    diff_label = paste("Change: ", estimate_label, stars, sep = "")) %>%
+  
+    write_rds("raw_data/myfd.rds")
+
+rm(z1,z2,z3,z4, mydat)
+```
+
+
+```{r, fig.height=6, fig.width=6, message=FALSE, warning = FALSE}
+library(viridis)
+mysim <- read_rds("raw_data/mysim.rds") 
+myfd <- read_rds("raw_data/myfd.rds")
+
+
+ggplot() +
+  geom_crossbar(data = mysim,
+                mapping = aes(x = median * 100, y = estimate, 
+                              ymin = lower_ci, ymax = upper_ci, 
+                              color = type, fill = type),
+                color = "#373737", alpha = 0.5) +
+  geom_text(data = mysim, mapping = aes(x = median * 100, y = estimate,
+                                        label = round(estimate, 0)),
+            nudge_y = 15) +
+  geom_text(data = myfd, 
+            mapping = aes(x = 50, y = 760, label = diff_label), color = "#373737") +
+  facet_wrap(~type, ncol = 2)  +
+  guides(fill = "none", color = "none") +
+  theme_classic(base_size = 14) +
+  labs(x = "% White Residents in surrounding 1 sq.km. cell",
+       y = "Median Distance (m) to Nearby Social Infrastructure\n(within 1 km buffer)",
+       caption = "Numbers show expected median distance (m), with 95% simulated confidence intervals.\nEstimates placed on x axis according to quartile for share of White residents,\nlocated at quartile midpoints.\nQ1 (First quartile) = 6~35% White. Q2 = 35-29%. Q3 = 59-72%. Q4 = 72-93%.",
+       subtitle = "Race vs. Access to Social Infrastructure") +
+  scale_x_continuous(breaks = c(0, 25, 50, 75, 100), limits = c(0, 100), 
+                     expand = expansion(c(0,0))) +
+  scale_fill_viridis(discrete = TRUE, option = "plasma", begin = 0, end = 0.6) +
+  scale_color_viridis(discrete = TRUE, option = "plasma", begin = 0, end = 0.6) +
+  theme(panel.border = element_rect(fill = NA, color = "#373737"),
+        panel.spacing.x = unit(0.75, "cm"),
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        strip.background = element_blank(),
+        plot.subtitle = element_text(hjust = 0.5),
+        plot.caption = element_text(hjust = 0),
+        plot.caption.position = "plot")
+```
+
+
+```{r, eval = FALSE, echo = FALSE}
+  geom_ribbon(data = mybands,
+              mapping = aes(x = x*100, y = median,
+                            ymin = lower_ci, ymax = upper_ci)) +
+
+mybands <- bind_rows(
+  read_rds("raw_data/mysim.rds")  %>%
+    filter(x %in% c(1,2,3,4)) %>%
+    group_by(type) %>%
+    summarize(
+      y = loess(formula = estimate ~ median) %>%
+        predict(newdata = data.frame(
+          median = seq(from = 0, to = 1, length.out = 21))),
+      x = seq(from = 0, to = 1, length.out = 21),
+  group = "median"),
+  
+  read_rds("raw_data/mysim.rds")  %>%
+    filter(x %in% c(1,2,3,4)) %>%
+    group_by(type) %>%
+    summarize(
+      y = loess(formula = lower_ci ~ lower) %>%
+        predict(newdata = data.frame(
+          lower = seq(from = 0, to = 1, length.out = 21))),
+      
+      x = seq(from = 0, to = 1, length.out = 21),
+  group = "lower_ci"),
+  
+  read_rds("raw_data/mysim.rds")  %>%
+    filter(x %in% c(1,2,3,4)) %>%
+    group_by(type) %>%
+    summarize(
+      y = loess(formula = upper_ci ~ upper) %>%
+        predict(newdata = data.frame(
+          upper = seq(from = 0, to = 1, length.out = 21))),
+      x = seq(from = 0, to = 1, length.out = 21),
+  group = "upper_ci")
+  ) %>%
+  pivot_wider(id_cols = c(type, x), names_from = group, values_from = y)
+    
+```
+
+## Grid Models
+
+### Percentages
+
+```{r, message=FALSE, warning = FALSE}
+library(tidyverse)
+mytypes <- read_rds("raw_data/buffer_dist.rds") %>%
+  # There are 275 builings in Boston that are unlabelled. We will just remove them.
+  filter(nchar(building_id) > 1) %>%
+  # Collect the following variables, telling us...
+  # This building in THAT CELL has HOW MANY social infrastructure sites of TYPE X within THAT RADIUS?
+  select(cell_id = buffer_id, building_id, type, contains("count"))
+```
+
+### Models
+
+What percentage of social infrastructure sites near that building are of type X?
+
+Need total number of social infrastructure sites near that building
+
+```{r, message = FALSE, warning = FALSE}
+grid <- read_rds("raw_data/grid.rds") %>%
+  as_tibble() %>%
+  select(-geometry)
+
+# Per building, how many sites are you proximate too?
+mydat <- mytypes %>%
+  # In each cell,
+  # on average, how many social businesses are you within 1000 km from?,
+  # given the total number of buildings in that cell
+  group_by(cell_id) %>%
+  summarize(
+    community = mean(count1000[type == "Community Spaces"], na.rm = TRUE),
+    social = mean(count1000[type == "Social Businesses"], na.rm = TRUE),
+    park = mean(count1000[type == "Parks"], na.rm = TRUE),
+    worship = mean(count1000[type == "Places of Worship"], na.rm = TRUE)) %>%
+  left_join(by = "cell_id", y = grid) %>%
+ # Impute second smallest value
+  mutate_at(vars(community, social, park, worship),
+            list(~if_else(. == 0, sort(unique(.))[2]/2, .))) %>%
+  mutate_at(vars(community, social, park, worship),
+            list(~log(.))) 
+ 
+
+# What kinds of places end up with closer access to social infrastructure?
+m1 <- mydat %>% 
+  lm(formula = community ~ pop_density_int + pop_black + pop_hisplat + pop_asian +
+       pop_some_college + median_income + income_inequality + 
+       median_monthly_housing_cost)
+
+m2 <- mydat %>% 
+  lm(formula = worship ~ pop_density_int + pop_black + pop_hisplat + pop_asian +
+       pop_some_college + median_income + income_inequality + 
+       median_monthly_housing_cost)
+
+m3 <- mydat %>% 
+  lm(formula = social ~ pop_density_int + pop_black + pop_hisplat + pop_asian +
+       pop_some_college + median_income + income_inequality + 
+       median_monthly_housing_cost)
+
+m4 <- mydat %>% 
+  lm(formula = park ~ pop_density_int + pop_black + pop_hisplat + pop_asian +
+       pop_some_college + median_income + income_inequality + 
+       median_monthly_housing_cost)
+
+
+texreg::screenreg(list(m1,m2,m3,m4))
+```
+
+
+### Median Distance
+
+```{r, message = FALSE, warning = FALSE}
+read_rds("raw_data/buffer_dist.rds") %>%
+  # There are 275 builings in Boston that are unlabelled. We will just remove them.
+  filter(nchar(building_id) > 1) %>%
+  # Collect the following variables, telling us...
+  # This building in THAT CELL was a median of this far away from social infrastructure sites of TYPE X within THAT RADIUS?
+  select(cell_id = buffer_id, building_id, type, dist = dist1000)  %>%
+  ggplot(mapping = aes(x = type, y = dist)) +
+  geom_boxplot()
+```
+
+### Other
+
+```{r, message=FALSE, warning = FALSE}
+library(tidyverse)
+library(sf)
+
+mytest <- mytypes %>%
+  select(cell_id, building_id, type, count = count1000) %>%
+  pivot_wider(id_cols = c(cell_id, building_id), names_from = type, values_from = count) %>%
+  # Filter to just buildings that were within that threshold of ANY social infrastructure
+  filter(`Community Spaces` != 0 |
+           `Social Businesses` != 0 |
+           `Places of Worship` != 0 |
+           `Parks` != 0) %>%
+  mutate(total = `Community Spaces` + `Social Businesses` + `Places of Worship` + `Parks`) %>%
+  mutate_at(vars(`Community Spaces`:`Social Businesses`), list(~./total))
+```
+
+## Case Study Final Visuals
+
+### Maps
+
+```{r}
+# Here's how you might visualize these all together
+grid <- read_rds("raw_data/grid.rds") %>%
+  filter(str_detect(milestone, "M1|M2|M3|M4"))
+sites <- read_rds("raw_data/sites.rds") 
+buildings <- read_rds("raw_data/buildings_points.rds")
+streets <- read_rds("raw_data/streets.rds")
+
+###Creating vector for color of ridgeplots###
+mycolors <- viridis(n = 4, option = "plasma")
+mycolors[4] <- viridis(n = 4, option = "plasma", end = 0.9)[4]
+
+#
+nearest <- read_rds("raw_data/nearesttype.rds") %>%
+  filter(cell_id %in% c("Cell 78", "Cell 161", "Cell 97"))
+
+g <- ggplot() +
+# Add grid as background
+  geom_sf(data = grid, color = NA, fill = "black") +
+  # Add streets
+  geom_sf(data = streets, color = "grey", size = 0.3, alpha = 0.8) +
+  labs(fill = "Type of Nearest\nSocial Infrastructure") +
+  theme_void(base_size = 14) +
+  theme(legend.position = c(0.8, 0.2),
+        panel.background = element_rect(fill = "black"),
+        legend.title = element_text(color = "white"),
+        legend.text = element_text(color = "white"),
+        plot.subtitle = element_text(color = "black", hjust = 0.5)) +
+  guides(fill = guide_legend(override.aes = list(size = 5)))
+
+# Albers Equal Area Conic Projection
+aea <- "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=m +no_defs"
+
+mydist <- read_rds("building_dist_dataset.rds") %>%
+  # Filter to sites within boston neighborhoods
+  filter(neighborhood != "Other") %>%
+  select(building_id, cell_id, community:social) %>%
+  pivot_longer(cols = -c(building_id, cell_id), names_to = "type", values_to = "dist") %>%
+  mutate(type = type %>% recode_factor(
+        "parks" = "Parks",
+    "social" = "Social\nBusinesses",
+    "worship" = "Places of\nWorship",
+    "community" = "Community\nSpaces"))
+
+###Loading ggridges to create ridgeplots###
+library(ggplot2)
+library(ggridges)
+```
+
+
+
+### Cell 161
+
+```{r}
+mybox <- grid %>% filter(cell_id == "Cell 161") %>% st_transform(crs = aea) %>% st_bbox()
+
+# Map
+g1 <- g + 
+  # Visualize buildings, colored by type of social infrastructure nearest to it
+  geom_sf(data = nearest %>% filter(cell_id == "Cell 161"), 
+          mapping = aes(fill = type),
+        shape = 21, color = "white", 
+        # Add some attributes to the dot (stroke = how thick the outline is)
+        stroke = 0.5, size = 3, alpha = 0.90) +
+  scale_fill_manual(values = mycolors,
+                    breaks = c("Community Spaces", "Places of Worship", "Social Businesses", "Parks")) +
+  coord_sf(crs = aea, 
+           xlim = c(mybox["xmin"]+50, mybox["xmax"]-50),
+           ylim = c(mybox["ymin"]+50, mybox["ymax"]-50)) +
+  labs(subtitle = "Buildings, Colored by Nearest\nType of Social Infrastructure") 
+
+# Ridgeplot
+g2 <- mydist %>% 
+  filter(cell_id == "Cell 161") %>%
+  ggplot(mapping = aes(x = dist, y = type, fill = type)) +
+  geom_density_ridges( color= "white", alpha = 0.7) +
+  scale_x_continuous(breaks = c(0, 250, 500, 750, 1000), limits = c(0, 1000)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  scale_fill_manual(values = mycolors,
+                    breaks = c("Community\nSpaces", "Places of\nWorship", "Social\nBusinesses", "Parks"))+
+  labs(y= NULL, x= "Distance (0 - 1000 meters)",
+       subtitle = "Distributions of Distance between\nBuildings and Social Infrastructure") +
+  theme_minimal(base_size = 14) +
+  guides(fill="none") +
+  theme(panel.grid.major.y = element_blank(),
+        plot.subtitle = element_text(hjust = 0.5, size = 12))
+
+
+g3 <- ggpubr::ggarrange(g1,g2, nrow =1, legend = "none", labels = c("A", "B"))
+
+ggsave(g3, filename = "viz/cell_161.png", dpi = 500, width = 10, height = 5)
+
+
+nearest %>% 
+  filter(cell_id == "Cell 161") %>%
+  as_tibble() %>%
+  group_by(type) %>%
+  summarize(count = n()) %>%
+  ungroup() %>%
+  mutate(percent = count / sum(count, na.rm = TRUE)*100,
+         percent = round(percent, 1))
+```
+
+
+### Cell 78
+
+```{r}
+mybox <- grid %>% filter(cell_id == "Cell 78") %>% st_transform(crs = aea) %>% st_bbox()
+
+# Map
+g1 <- g + 
+  # Visualize buildings, colored by type of social infrastructure nearest to it
+  geom_sf(data = nearest %>% filter(cell_id == "Cell 78"), 
+          mapping = aes(fill = type),
+        shape = 21, color = "white", 
+        # Add some attributes to the dot (stroke = how thick the outline is)
+        stroke = 0.5, size = 1.5, alpha = 0.90) +
+  scale_fill_manual(values = mycolors,
+                    breaks = c("Community Spaces", "Places of Worship", "Social Businesses", "Parks")) +
+  coord_sf(crs = aea, 
+           xlim = c(mybox["xmin"]+50, mybox["xmax"]-50),
+           ylim = c(mybox["ymin"]+50, mybox["ymax"]-50)) +
+  labs(subtitle = "Buildings, Colored by Nearest\nType of Social Infrastructure") 
+
+# Ridgeplot
+g2 <- mydist %>% 
+  filter(cell_id == "Cell 78") %>%
+  ggplot(mapping = aes(x = dist, y = type, fill = type)) +
+  geom_density_ridges( color= "white", alpha = 0.7) +
+  scale_x_continuous(breaks = c(0, 250, 500, 750, 1000), limits = c(0, 1000)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  scale_fill_manual(values = mycolors,
+                    breaks = c("Community\nSpaces", "Places of\nWorship", "Social\nBusinesses", "Parks"))+
+  labs(y= NULL, x= "Distance (0 - 1000 meters)",
+       subtitle = "Distributions of Distance between\nBuildings and Social Infrastructure") +
+  theme_minimal(base_size = 14) +
+  guides(fill="none") +
+  theme(panel.grid.major.y = element_blank(),
+        plot.subtitle = element_text(hjust = 0.5, size = 12))
+
+
+g3 <- ggpubr::ggarrange(g1,g2, nrow =1, legend = "none", labels = c("A", "B"))
+
+ggsave(g3, filename = "viz/cell_78.png", dpi = 500, width = 10, height = 5)
+
+
+nearest %>% 
+  filter(cell_id == "Cell 78") %>%
+  as_tibble() %>%
+  group_by(type) %>%
+  summarize(count = n()) %>%
+  ungroup() %>%
+  mutate(percent = count / sum(count, na.rm = TRUE)*100,
+         percent = round(percent, 1))
+```
+
+
+### Cell 97
+
+```{r}
+mybox <- grid %>% filter(cell_id == "Cell 97") %>% st_transform(crs = aea) %>% st_bbox()
+
+# Map
+g1 <- g + 
+  # Visualize buildings, colored by type of social infrastructure nearest to it
+  geom_sf(data = nearest %>% filter(cell_id == "Cell 97"), 
+          mapping = aes(fill = type),
+        shape = 21, color = "white", 
+        # Add some attributes to the dot (stroke = how thick the outline is)
+        stroke = 0.5, size = 1.5, alpha = 0.90) +
+  scale_fill_manual(values = mycolors,
+                    breaks = c("Community Spaces", "Places of Worship", "Social Businesses", "Parks")) +
+  coord_sf(crs = aea, 
+           xlim = c(mybox["xmin"]+50, mybox["xmax"]-50),
+           ylim = c(mybox["ymin"]+50, mybox["ymax"]-50)) +
+  labs(subtitle = "Buildings, Colored by Nearest\nType of Social Infrastructure") 
+
+# Ridgeplot
+g2 <- mydist %>% 
+  filter(cell_id == "Cell 97") %>%
+  ggplot(mapping = aes(x = dist, y = type, fill = type)) +
+  geom_density_ridges( color= "white", alpha = 0.7) +
+  scale_x_continuous(breaks = c(0, 250, 500, 750, 1000), limits = c(0, 1000)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  scale_fill_manual(values = mycolors,
+                    breaks = c("Community\nSpaces", "Places of\nWorship", "Social\nBusinesses", "Parks"))+
+  labs(y= NULL, x= "Distance (0 - 1000 meters)",
+       subtitle = "Distributions of Distance between\nBuildings and Social Infrastructure") +
+  theme_minimal(base_size = 14) +
+  guides(fill="none") +
+  theme(panel.grid.major.y = element_blank(),
+        plot.subtitle = element_text(hjust = 0.5, size = 12))
+
+
+g3 <- ggpubr::ggarrange(g1,g2, nrow =1, legend = "none", labels = c("A", "B"))
+
+ggsave(g3, filename = "viz/cell_97.png", dpi = 500, width = 10, height = 5)
+
+
+nearest %>% 
+  filter(cell_id == "Cell 97") %>%
+  as_tibble() %>%
+  group_by(type) %>%
+  summarize(count = n()) %>%
+  ungroup() %>%
+  mutate(percent = count / sum(count, na.rm = TRUE)*100,
+         percent = round(percent, 1))
+```
+
+
+
+```{r}
+
+sumdist <- expand_grid(
+  cell_id = mydist$cell_id %>% unique(),
+  type = mydist$type %>% levels())  %>%
+  # Join in distnace stats
+  left_join(by = c("cell_id", "type"),
+            y = mydist %>%
+              group_by(cell_id,type) %>%
+              summarize(dist = median(dist, na.rm = TRUE))) %>%
+  # join in percentage of total social infrastructure of each type
+  left_join(by = c("type", "cell_id"),
+            y = sites %>% 
+              as_tibble() %>%
+              mutate(type = type %>% recode_factor(
+                "Community Spaces" = "Community\nSpaces",
+                "Places of Worship" = "Places of\nWorship",
+                "Social Businesses" = "Social\nBusinesses",
+                "Parks" = "Parks")) %>%
+              group_by(type, cell_id) %>%
+              summarize(count = n()) %>%
+              ungroup() %>%
+              group_by(cell_id) %>%
+              mutate(total = sum(count, na.rm=  TRUE),
+                     percent = count / total)) %>%
+  mutate_at(vars(dist,count:percent), list(~if_else(is.na(.), 0, as.numeric(.)))) %>%
+  mutate(row = if_else(cell_id %in% c("Cell 78", "Cell 161", "Cell 97"), cell_id, NA_character_)) %>%
+  mutate(type = factor(type, levels = c("Community\nSpaces", "Places of\nWorship", "Social\nBusinesses", "Parks")))
+
+bounds <-  sumdist %>% 
+  with(seq(from = min(count, na.rm = TRUE), to = max(count, na.rm = TRUE), length.out = 5))
+  
+
+###Creating vector for color of ridgeplots###
+cols <- viridis(n = 4, option = "plasma")
+cols[4] <- viridis(n = 4, option = "plasma", end = 0.9)[4]
+
+# Create a background
+a <- data.frame(dist = seq(from = 0, to = max(sumdist$dist)+2, length.out = 200),
+           y = seq(from = 0, to = 100, length.out = 200))
+b <- data.frame(count = seq(from = 0, to = max(sumdist$count)+2, length.out = 200),
+           x = seq(from = 0, to = 100, length.out = 200))
+# Make full grid
+bg <- expand_grid(dist = a$dist, count = b$count) %>%
+  left_join(by = "dist", y = a) %>%
+  left_join(by = "count", y = b) %>%
+  mutate(shade = x * (100 - y) ) %>%
+  expand_grid(type = sumdist$type %>% levels()) %>%
+ mutate(type = factor(type, levels = c("Community\nSpaces", "Places of\nWorship", "Social\nBusinesses", "Parks")))
+remove(a,b)
+
+### Creating Visualization
+g <- ggplot() +
+  geom_tile(data = bg, mapping = aes(x = count, y = dist, fill = shade)) +
+  scale_fill_gradient2(low = "white", high = "black") +
+  ggnewscale::new_scale("fill") +
+  geom_point(data = sumdist %>% select(-row),
+             mapping = aes(x = count, y = dist, fill = type), 
+             shape = 21, size = 3, color = "#373737", alpha = 0.4) +
+  geom_hline(data = sumdist %>% 
+               filter(cell_id %in% c("Cell 78", "Cell 161", "Cell 97")), 
+             mapping = aes(yintercept = dist, color = type),
+             size = 2.5, color = "white") +
+  geom_hline(data = sumdist %>% 
+               filter(cell_id %in% c("Cell 78", "Cell 161", "Cell 97")), 
+             mapping = aes(yintercept = dist, color = type),
+             size = 2) +
+  geom_vline(data = sumdist %>% 
+               filter(cell_id %in% c("Cell 78", "Cell 161", "Cell 97")), 
+             mapping = aes(xintercept = count, color = type),
+             size = 2.5, color = "white") +
+  geom_vline(data = sumdist %>% 
+               filter(cell_id %in% c("Cell 78", "Cell 161", "Cell 97")), 
+             mapping = aes(xintercept = count, color = type),
+             size = 2) +
+  
+  geom_point(data = sumdist %>%
+               filter(cell_id %in% c("Cell 78", "Cell 161", "Cell 97")),
+             mapping = aes(x = count, y = dist, fill = type), 
+             shape = 21, color = "white", stroke = 1, size = 7) +
+  geom_point(data = sumdist %>%
+               filter(cell_id %in% c("Cell 78", "Cell 161", "Cell 97")),
+             mapping = aes(x = count, y = dist, fill = type), 
+             shape = 21, color = "black", stroke = 0.75, size = 5) +
+  
+  shadowtext::geom_shadowtext(data = sumdist %>%
+               filter(cell_id %in% c("Cell 78", "Cell 161", "Cell 97")),
+               mapping = aes(x = count + 1, y = dist - 75,
+                             label = paste(round(dist, 0), " m,\nn = ", count, sep = "")),
+               bg.round = 0.2, bg.color = "white", color = "black", size = 3, 
+               hjust = 0, vjust = 1, fontface = "bold") +
+  
+  scale_color_manual(values = cols,
+                    breaks = c("Community\nSpaces", "Places of\nWorship", "Social\nBusinesses", "Parks"))+
+  scale_fill_manual(values = cols,
+                    breaks = c("Community\nSpaces", "Places of\nWorship", "Social\nBusinesses", "Parks"))+
+  scale_y_continuous(breaks = c(0, 250, 500, 750, 1000), limits = c(0, 1000), expand = expansion(c(0,0))) +
+  scale_x_continuous(
+    breaks = c(1, 5, 10, 15, 20, 25, 30),  limits = c(bounds[1], 27),
+    expand = expansion(add = c(1, 0))) +
+  labs(
+    x = "Frequency of Social Infrastructure per Cell (Total Count)",
+    y = "Average Distance from Buildings to Social Infrastructure",
+    color = "Social Infrastructure Type", 
+    subtitle = "Social Infrastructure by Proximity & Frequency in Boston Case Studies",
+    caption = "<b>Black shaded regions</b> show ideal outcome. <b>Transparent points</b> show other Boston grid cells.") +
+  theme_classic(base_size = 14) +
+  theme(axis.title.x = element_text(size = 12),
+        axis.title.y = element_text(size = 12),
+        axis.line = element_blank(),
+        panel.spacing = unit(0.5, "cm"),
+        panel.border = element_rect(fill = NA, color = "#373737"),
+        plot.subtitle = element_text(size = 14, hjust = 0.5),
+        plot.caption = ggtext::element_markdown(size = 10, hjust = 0),
+        strip.background = element_blank(),
+        strip.text.y = ggtext::element_markdown(size = 12, hjust = 0, angle = 0)) +
+  facet_grid(rows = vars(row), cols = vars(type), scales = "free_x", drop = TRUE,
+             labeller = labeller(.rows = c(
+               "Cell 161" = "<b>Back Bay</b><br>(Cell 161)",
+               "Cell 97" = "<b>Nubian<br>Square</b><br>(Cell 97)",
+               "Cell 78" = "<b>Mount<br>Bowdoin</b><br>(Cell 78)"))) +
+  theme(legend.position = "none")
+
+ggsave(g, filename = "viz/scatterplot.png", dpi = 500, width = 8, height = 6)
+
+rm(bg, g, a,b, sumdist)
+```
+

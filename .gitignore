@@ -1,0 +1,15 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+code_files/
+code_cache/
+raw_data/buffer_buildings_2000.rds
+raw_data/buffer_buildings_1500.rds
+raw_data/buffer_buildings_500.rds
+raw_data/buffer_buildings_100.rds
+raw_data/buffer_buildings_0.rds
+raw_data/buffer_dist.rds
+raw_data/buffer_dist_100.rds
+raw_data/buildings.rds
+rsconnect/
