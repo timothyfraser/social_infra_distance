@@ -22,6 +22,15 @@ See below for a brief outline of key code files for replicating this study. (Not
 - [`03_figure_A3.R`](https://github.com/timothyfraser/social_infra_distance/blob/main/03_figure_A3.R): replication code for paper Figure A3.
 - [`03_figure_A4.R`](https://github.com/timothyfraser/social_infra_distance/blob/main/03_figure_A4.R): replication code for paper Figure A4.
 
+## Folders
+
+Data used/generated for this study are stored in the following folders: 
+
+- `/raw_data`: folder for containing all raw data.
+- `/viz`: folder for containing all visuals.
+- `/count`: folder for containing spatial counts. (Old)
+- `/dist`: folder for containing spatial distances. (Old)
+
 ## Relevant Links
 - See our manuscript at: LINK TBD
 - See our supplementary information appendix at https://doi.org/10.1016/j.landurbplan.2023.104922.
